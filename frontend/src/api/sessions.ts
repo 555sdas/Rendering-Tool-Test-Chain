@@ -1,10 +1,11 @@
 import apiClient from './client';
+import type { TestSession as UiTestSession } from '@/types';
 
 export interface TestSession {
   id: number;
   name: string;
   description: string | null;
-  status: string;
+  status: UiTestSession['status'];
   device_model: string | null;
   os_version: string | null;
   xr_runtime: string | null;

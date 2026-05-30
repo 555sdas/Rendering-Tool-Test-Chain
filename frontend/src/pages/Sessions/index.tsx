@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Card,
   Table,
@@ -28,6 +28,27 @@ import { sessionsApi } from '@/api/sessions';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
+
+const getConfigString = (config: Record<string, unknown> | null | undefined, keys: string[], fallback = '-') => {
+  for (const key of keys) {
+    const value = config?.[key];
+    if (value !== undefined && value !== null && value !== '') {
+      return String(value);
+    }
+  }
+  return fallback;
+};
+
+const getConfigNumber = (config: Record<string, unknown> | null | undefined, keys: string[], fallback = 0) => {
+  for (const key of keys) {
+    const value = config?.[key];
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+  }
+  return fallback;
+};
 
 const mockSessions: TestSession[] = [
   {
@@ -222,41 +243,50 @@ const Sessions: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<TestSession | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
-  useEffect(() => {
-    const loadSessions = async () => {
-      setLoading(true);
-      try {
-        const response = await sessionsApi.list({ limit: 100 });
-        const apiSessions: TestSession[] = response.items.map((session) => ({
-          ...session,
-          status: session.status as TestSession['status'],
-          task_name: session.name,
-          start_time: session.started_at || undefined,
-          end_time: session.ended_at,
-          device_info: {
-            device_name: session.device_model || '未知设备',
-            os_version: session.os_version || '-',
-            gpu_model: String(session.config?.['gpu_model'] || '-'),
-            cpu_model: String(session.config?.['cpu_model'] || '-'),
-            ram_gb: Number(session.config?.['ram_gb'] || 0),
-          },
-          scene_info: {
-            scene_name: String(session.config?.['scene_name'] || `场景 ${session.scene_id || '-'}`),
-            complexity: (session.config?.['complexity'] as NonNullable<TestSession['scene_info']>['complexity']) || 'medium',
-            render_pipeline: String(session.config?.['render_pipeline'] || 'URP'),
-          },
-        }));
-        if (apiSessions.length > 0) {
-          setSessions(apiSessions);
-        }
-      } catch {
-        message.warning('未能读取后端测试会话，当前显示内置演示数据');
-      } finally {
-        setLoading(false);
-      }
+  const mapSession = useCallback((session: TestSession): TestSession => {
+    const systemMemoryMb = getConfigNumber(session.config, ['system_memory_mb', 'systemMemorySize']);
+    return {
+      ...session,
+      status: session.status as TestSession['status'],
+      task_name: session.name,
+      start_time: session.started_at || undefined,
+      end_time: session.ended_at,
+      device_info: {
+        device_name: session.device_model || getConfigString(session.config, ['device_name', 'device_model'], '未知设备'),
+        os_version: session.os_version || getConfigString(session.config, ['os_version'], '-'),
+        gpu_model: getConfigString(session.config, ['gpu_model', 'graphicsDeviceName'], '-'),
+        gpu_version: getConfigString(session.config, ['gpu_version', 'graphicsDeviceVersion'], '-'),
+        gpu_memory_mb: getConfigNumber(session.config, ['gpu_memory_mb', 'graphicsMemorySize']),
+        cpu_model: getConfigString(session.config, ['cpu_model', 'processorType'], '-'),
+        ram_gb: getConfigNumber(session.config, ['ram_gb'], systemMemoryMb ? Number((systemMemoryMb / 1024).toFixed(2)) : 0),
+        system_memory_mb: systemMemoryMb,
+      },
+      scene_info: {
+        scene_name: getConfigString(session.config, ['scene_name'], `场景 ${session.scene_id || '-'}`),
+        complexity: (session.config?.['complexity'] as NonNullable<TestSession['scene_info']>['complexity']) || 'medium',
+        render_pipeline: getConfigString(session.config, ['render_pipeline'], 'URP'),
+      },
     };
-    loadSessions();
   }, []);
+
+  const loadSessions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await sessionsApi.list({ limit: 100 });
+      const apiSessions = response.items.map(mapSession);
+      if (apiSessions.length > 0) {
+        setSessions(apiSessions);
+      }
+    } catch {
+      message.warning('未能读取后端测试会话，当前显示内置演示数据');
+    } finally {
+      setLoading(false);
+    }
+  }, [mapSession]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
 
   const filteredSessions = sessions.filter((s) => {
     const matchSearch = (s.task_name || s.name || '').toLowerCase().includes(searchText.toLowerCase());
@@ -269,7 +299,12 @@ const Sessions: React.FC = () => {
     setIsDetailOpen(true);
   };
 
-  const getDuration = (start: string | undefined, end: string | null | undefined) => {
+  const getDuration = (start: string | undefined, end: string | null | undefined, durationSeconds?: number | null) => {
+    if (durationSeconds !== undefined && durationSeconds !== null) {
+      const mins = Math.floor(durationSeconds / 60);
+      const secs = Math.floor(durationSeconds % 60);
+      return `${mins}分${secs}秒`;
+    }
     if (!start) return '-';
     const startTime = new Date(start).getTime();
     const endTime = end ? new Date(end).getTime() : Date.now();
@@ -311,6 +346,12 @@ const Sessions: React.FC = () => {
       ),
     },
     {
+      title: 'CPU',
+      dataIndex: 'device_info',
+      key: 'cpu',
+      render: (info: TestSession['device_info']) => info?.cpu_model || '-',
+    },
+    {
       title: '场景复杂度',
       dataIndex: 'scene_info',
       key: 'complexity',
@@ -327,10 +368,16 @@ const Sessions: React.FC = () => {
       render: (time: string | undefined) => time ? new Date(time).toLocaleString('zh-CN') : '-',
     },
     {
+      title: '结束时间',
+      dataIndex: 'end_time',
+      key: 'end_time',
+      render: (time: string | null | undefined) => time ? new Date(time).toLocaleString('zh-CN') : '-',
+    },
+    {
       title: '耗时',
       key: 'duration',
       render: (_: unknown, record: TestSession) =>
-        getDuration(record.start_time, record.end_time),
+        getDuration(record.start_time, record.end_time, record.duration_seconds),
     },
     {
       title: '操作',
@@ -348,11 +395,22 @@ const Sessions: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>测试会话</h2>
         <Space>
-          <Button type="primary" icon={<PlayCircleOutlined />}>
-            新建测试
+          <Button onClick={loadSessions}>
+            刷新
           </Button>
         </Space>
       </div>
+
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ color: '#475569', lineHeight: 1.8 }}>
+          测试会话由 Unity 插件上传后自动生成或同步。项目用于归类测试结果；Unity 配置中的
+          <strong> Project ID </strong>
+          决定数据归到哪个项目。
+          <br />
+          自动上传模式填写平台地址：
+          <code style={{ marginLeft: 8 }}>http://localhost:8002/api/v1</code>
+        </div>
+      </Card>
 
       <Card style={{ marginBottom: 16 }}>
         <Space>
@@ -423,6 +481,12 @@ const Sessions: React.FC = () => {
                     ? new Date(selectedSession.end_time).toLocaleString('zh-CN')
                     : '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="耗时">
+                  {getDuration(selectedSession.start_time, selectedSession.end_time, selectedSession.duration_seconds)}
+                </Descriptions.Item>
+                <Descriptions.Item label="上传模式">
+                  {String(selectedSession.config?.['sync_mode'] || '-')}
+                </Descriptions.Item>
               </Descriptions>
 
               <Descriptions bordered column={2} size="small" title="设备信息" style={{ marginTop: 16 }}>
@@ -435,11 +499,24 @@ const Sessions: React.FC = () => {
                 <Descriptions.Item label="GPU">
                   {selectedSession.device_info?.gpu_model || '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="GPU版本">
+                  {selectedSession.device_info?.gpu_version || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="显存">
+                  {selectedSession.device_info?.gpu_memory_mb
+                    ? `${selectedSession.device_info.gpu_memory_mb} MB`
+                    : '-'}
+                </Descriptions.Item>
                 <Descriptions.Item label="CPU">
                   {selectedSession.device_info?.cpu_model || '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="内存">
+                <Descriptions.Item label="系统内存">
                   {selectedSession.device_info?.ram_gb ? `${selectedSession.device_info.ram_gb} GB` : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="系统内存原始值">
+                  {selectedSession.device_info?.system_memory_mb
+                    ? `${selectedSession.device_info.system_memory_mb} MB`
+                    : '-'}
                 </Descriptions.Item>
               </Descriptions>
             </TabPane>

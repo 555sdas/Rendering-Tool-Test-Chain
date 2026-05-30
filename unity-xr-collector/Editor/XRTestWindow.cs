@@ -315,16 +315,24 @@ namespace XRDataCollector.Editor
         private void DrawUploadPanel()
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Network Upload", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Platform Sync", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
-            uploadUrl = EditorGUILayout.TextField("Upload URL:", uploadUrl);
-            authToken = EditorGUILayout.PasswordField("Bearer Token:", authToken);
+            var manager = GetManager();
+            if (manager != null && manager.Config != null)
+            {
+                EditorGUILayout.LabelField("Platform:", manager.Config.platformBaseUrl);
+                EditorGUILayout.LabelField("Mode:", manager.Config.autoCreateSession ? "Auto create session and upload" : "Upload to configured URL");
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("XRTestManager not found. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Info);
+            }
 
             EditorGUILayout.Space(5);
 
-            GUI.enabled = !string.IsNullOrEmpty(uploadUrl);
-            if (GUILayout.Button("Upload Data"))
+            GUI.enabled = manager != null;
+            if (GUILayout.Button("Upload / Sync to Platform", GUILayout.Height(32)))
             {
                 UploadData();
             }
@@ -353,8 +361,17 @@ namespace XRDataCollector.Editor
                 config.autoStart = EditorGUILayout.Toggle("Auto Start:", config.autoStart);
                 config.autoExportOnQuit = EditorGUILayout.Toggle("Auto Export On Quit:", config.autoExportOnQuit);
                 config.enableNetworkUpload = EditorGUILayout.Toggle("Enable Network Upload:", config.enableNetworkUpload);
-                config.uploadUrl = EditorGUILayout.TextField("Upload URL:", config.uploadUrl);
+
+                EditorGUILayout.Space(5);
+                EditorGUILayout.LabelField("Platform Sync", EditorStyles.boldLabel);
+                config.platformBaseUrl = EditorGUILayout.TextField("Platform API Base URL:", config.platformBaseUrl);
+                config.autoCreateSession = EditorGUILayout.Toggle("Auto Create Session:", config.autoCreateSession);
+                config.projectId = EditorGUILayout.IntField("Project ID:", config.projectId);
+                config.sceneId = EditorGUILayout.IntField("Scene ID:", config.sceneId);
+                config.uploadUrl = EditorGUILayout.TextField("Fixed Upload URL:", config.uploadUrl);
                 config.authToken = EditorGUILayout.PasswordField("Bearer Token:", config.authToken);
+                config.username = EditorGUILayout.TextField("Username:", config.username);
+                config.password = EditorGUILayout.PasswordField("Password:", config.password);
 
                 EditorGUILayout.Space(5);
                 EditorGUILayout.LabelField("Collectors", EditorStyles.boldLabel);
@@ -474,14 +491,8 @@ namespace XRDataCollector.Editor
                 return;
             }
 
-            if (string.IsNullOrEmpty(uploadUrl))
-            {
-                ShowStatus("Please enter an upload URL.", MessageType.Warning);
-                return;
-            }
-
-            manager.UploadData(uploadUrl, authToken);
-            ShowStatus("Uploading data...", MessageType.Info);
+            manager.UploadData("", null);
+            ShowStatus("Syncing data to platform...", MessageType.Info);
         }
 
         #endregion

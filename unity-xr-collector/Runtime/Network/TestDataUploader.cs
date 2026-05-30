@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -56,6 +57,33 @@ namespace XRDataCollector.Network
 
             string jsonPayload = BuildJsonPayload(samples, session);
             host.StartCoroutine(UploadCoroutine(url, jsonPayload, authToken, callback));
+        }
+
+        public void UploadAsync(List<PerformanceSample> samples, XRTestSession session, XRTestConfig config, Action<bool> callback)
+        {
+            if (samples == null || samples.Count == 0)
+            {
+                Debug.LogWarning("[TestDataUploader] No samples to upload.");
+                callback?.Invoke(false);
+                return;
+            }
+
+            if (config == null)
+            {
+                Debug.LogError("[TestDataUploader] XRTestConfig is null.");
+                callback?.Invoke(false);
+                return;
+            }
+
+            var host = GetCoroutineHost();
+            if (host == null)
+            {
+                Debug.LogError("[TestDataUploader] Cannot find a MonoBehaviour to run coroutine.");
+                callback?.Invoke(false);
+                return;
+            }
+
+            host.StartCoroutine(AutoSyncCoroutine(samples, session, config, callback));
         }
 
         #endregion
@@ -115,6 +143,114 @@ namespace XRDataCollector.Network
             }
         }
 
+        private IEnumerator AutoSyncCoroutine(List<PerformanceSample> samples, XRTestSession session, XRTestConfig config, Action<bool> callback)
+        {
+            string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
+            if (string.IsNullOrEmpty(baseUrl))
+            {
+                Debug.LogError("[TestDataUploader] Platform base URL is empty.");
+                callback?.Invoke(false);
+                yield break;
+            }
+
+            string token = config.authToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
+            }
+
+            if (string.IsNullOrEmpty(token))
+            {
+                Debug.LogError("[TestDataUploader] Cannot upload without token.");
+                callback?.Invoke(false);
+                yield break;
+            }
+
+            string uploadUrl = config.uploadUrl;
+            if (string.IsNullOrEmpty(uploadUrl) || config.autoCreateSession)
+            {
+                int sessionId = 0;
+                yield return CreateSessionCoroutine(baseUrl, token, config, session, samples[0], value => sessionId = value);
+                if (sessionId <= 0)
+                {
+                    callback?.Invoke(false);
+                    yield break;
+                }
+                uploadUrl = $"{baseUrl}/data-collection/test-sessions/{sessionId}/samples/batch";
+            }
+
+            string jsonPayload = BuildJsonPayload(samples, session);
+            bool uploadSuccess = false;
+            yield return UploadCoroutine(uploadUrl, jsonPayload, token, success => uploadSuccess = success);
+            callback?.Invoke(uploadSuccess);
+        }
+
+        private IEnumerator LoginCoroutine(string baseUrl, string username, string password, Action<string> callback)
+        {
+            using (var request = new UnityWebRequest($"{baseUrl}/auth/login", "POST"))
+            {
+                string form = $"username={UnityWebRequest.EscapeURL(username)}&password={UnityWebRequest.EscapeURL(password)}";
+                byte[] bodyRaw = Encoding.UTF8.GetBytes(form);
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                request.timeout = 30;
+
+                yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+                bool success = request.result == UnityWebRequest.Result.Success;
+#else
+                bool success = !request.isNetworkError && !request.isHttpError;
+#endif
+                if (!success)
+                {
+                    Debug.LogError($"[TestDataUploader] Login failed: {request.error} {request.downloadHandler.text}");
+                    callback?.Invoke(null);
+                    yield break;
+                }
+
+                callback?.Invoke(ExtractStringField(request.downloadHandler.text, "access_token"));
+            }
+        }
+
+        private IEnumerator CreateSessionCoroutine(
+            string baseUrl,
+            string token,
+            XRTestConfig config,
+            XRTestSession session,
+            PerformanceSample firstSample,
+            Action<int> callback)
+        {
+            string body = BuildCreateSessionJson(config, session, firstSample);
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
+
+            using (var request = new UnityWebRequest($"{baseUrl}/data-collection/test-sessions", "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
+                request.SetRequestHeader("Authorization", "Bearer " + token);
+                request.timeout = 30;
+
+                yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+                bool success = request.result == UnityWebRequest.Result.Success;
+#else
+                bool success = !request.isNetworkError && !request.isHttpError;
+#endif
+                if (!success)
+                {
+                    Debug.LogError($"[TestDataUploader] Create session failed: {request.error} {request.downloadHandler.text}");
+                    callback?.Invoke(0);
+                    yield break;
+                }
+
+                callback?.Invoke(ExtractIntField(request.downloadHandler.text, "id"));
+            }
+        }
+
         private string BuildJsonPayload(List<PerformanceSample> samples, XRTestSession session)
         {
             var sb = new StringBuilder();
@@ -151,6 +287,7 @@ namespace XRDataCollector.Network
                 sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
                 sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
                 sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
+                AppendDeviceInfo(sb, s.deviceInfo);
                 sb.AppendLine("      \"renderQuality\": {");
                 sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
                 sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
@@ -172,6 +309,86 @@ namespace XRDataCollector.Network
             sb.AppendLine("}");
 
             return sb.ToString();
+        }
+
+        private void AppendDeviceInfo(StringBuilder sb, DeviceInfo info)
+        {
+            if (info == null)
+            {
+                sb.AppendLine("      \"deviceInfo\": null,");
+                return;
+            }
+
+            sb.AppendLine("      \"deviceInfo\": {");
+            sb.AppendLine($"        \"deviceModel\": \"{EscapeJson(info.deviceModel)}\",");
+            sb.AppendLine($"        \"deviceName\": \"{EscapeJson(info.deviceName)}\",");
+            sb.AppendLine($"        \"operatingSystem\": \"{EscapeJson(info.operatingSystem)}\",");
+            sb.AppendLine($"        \"processorType\": \"{EscapeJson(info.processorType)}\",");
+            sb.AppendLine($"        \"processorCount\": {info.processorCount},");
+            sb.AppendLine($"        \"systemMemorySize\": {info.systemMemorySize},");
+            sb.AppendLine($"        \"graphicsDeviceName\": \"{EscapeJson(info.graphicsDeviceName)}\",");
+            sb.AppendLine($"        \"graphicsDeviceVendor\": \"{EscapeJson(info.graphicsDeviceVendor)}\",");
+            sb.AppendLine($"        \"graphicsDeviceVersion\": \"{EscapeJson(info.graphicsDeviceVersion)}\",");
+            sb.AppendLine($"        \"graphicsMemorySize\": {info.graphicsMemorySize},");
+            sb.AppendLine($"        \"screenResolution\": \"{EscapeJson(info.screenResolution)}\"");
+            sb.AppendLine("      },");
+        }
+
+        private string BuildCreateSessionJson(XRTestConfig config, XRTestSession session, PerformanceSample sample)
+        {
+            var info = sample.deviceInfo;
+            string name = string.IsNullOrEmpty(config.sessionName)
+                ? $"Unity采集-{DateTime.Now:yyyyMMdd-HHmmss}"
+                : config.sessionName;
+            string deviceModel = info != null ? info.deviceModel : SystemInfo.deviceModel;
+            string osVersion = info != null ? info.operatingSystem : SystemInfo.operatingSystem;
+            string appVersion = session != null ? session.AppVersion : Application.version;
+            string unityVersion = session != null ? session.UnityVersion : Application.unityVersion;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"name\": \"{EscapeJson(name)}\",");
+            sb.AppendLine("  \"description\": \"Unity插件自动同步创建\",");
+            sb.AppendLine($"  \"device_model\": \"{EscapeJson(deviceModel)}\",");
+            sb.AppendLine($"  \"os_version\": \"{EscapeJson(osVersion)}\",");
+            sb.AppendLine("  \"xr_runtime\": \"Unity Editor / OpenXR\",");
+            sb.AppendLine($"  \"app_version\": \"{EscapeJson(appVersion)}\",");
+            sb.AppendLine($"  \"scene_id\": {config.sceneId},");
+            sb.AppendLine($"  \"project_id\": {config.projectId},");
+            sb.AppendLine("  \"config\": {");
+            sb.AppendLine($"    \"unity_version\": \"{EscapeJson(unityVersion)}\",");
+            sb.AppendLine($"    \"gpu_model\": \"{EscapeJson(info != null ? info.graphicsDeviceName : SystemInfo.graphicsDeviceName)}\",");
+            sb.AppendLine($"    \"gpu_vendor\": \"{EscapeJson(info != null ? info.graphicsDeviceVendor : SystemInfo.graphicsDeviceVendor)}\",");
+            sb.AppendLine($"    \"gpu_version\": \"{EscapeJson(info != null ? info.graphicsDeviceVersion : SystemInfo.graphicsDeviceVersion)}\",");
+            sb.AppendLine($"    \"system_memory_mb\": {(info != null ? info.systemMemorySize : SystemInfo.systemMemorySize)},");
+            sb.AppendLine($"    \"gpu_memory_mb\": {(info != null ? info.graphicsMemorySize : SystemInfo.graphicsMemorySize)},");
+            sb.AppendLine($"    \"screen_resolution\": \"{Screen.width}x{Screen.height}\",");
+            sb.AppendLine("    \"sync_mode\": \"unity_auto_sync\"");
+            sb.AppendLine("  }");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private string NormalizeBaseUrl(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Trim().TrimEnd('/');
+        }
+
+        private string ExtractStringField(string json, string field)
+        {
+            var match = Regex.Match(json, $"\"{field}\"\\s*:\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private int ExtractIntField(string json, string field)
+        {
+            var match = Regex.Match(json, $"\"{field}\"\\s*:\\s*(\\d+)");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int value))
+            {
+                return value;
+            }
+            return 0;
         }
 
         private string EscapeJson(string value)

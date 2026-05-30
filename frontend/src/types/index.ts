@@ -38,8 +38,11 @@ export interface DeviceInfo {
   device_name: string;
   os_version: string;
   gpu_model: string;
+  gpu_version?: string;
+  gpu_memory_mb?: number;
   cpu_model: string;
   ram_gb: number;
+  system_memory_mb?: number;
 }
 
 export interface SceneInfo {

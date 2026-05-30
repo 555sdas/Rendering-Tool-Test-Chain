@@ -61,6 +61,9 @@ class PerformanceSampleCreate(BaseModel):
 
 class PerformanceSampleBatchCreate(BaseModel):
     samples: list[dict] = Field(..., min_length=1)
+    session: Optional[dict] = None
+    uploadTime: Optional[datetime] = None
+    sampleCount: Optional[int] = None
 
 
 class TestTaskCreate(BaseModel):
@@ -82,6 +85,58 @@ class TestTaskUpdate(BaseModel):
     priority: Optional[int] = Field(None, ge=0, le=10)
 
 
+def _first_value(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _parse_timestamp(value) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, str) and value:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    return datetime.utcnow()
+
+
+def _device_info_from_sample(item: dict) -> dict:
+    device_info = item.get("deviceInfo") or item.get("device_info") or {}
+    if not isinstance(device_info, dict):
+        device_info = {}
+    return device_info
+
+
+def _merge_session_config(session: TestSession, updates: dict) -> None:
+    config = dict(session.config or {})
+    for key, value in updates.items():
+        if value not in (None, ""):
+            config[key] = value
+    session.config = config
+
+
+def _session_response(session: TestSession) -> dict:
+    return {
+        "id": session.id,
+        "name": session.name,
+        "description": session.description,
+        "status": session.status.value if hasattr(session.status, "value") else session.status,
+        "device_model": session.device_model,
+        "os_version": session.os_version,
+        "xr_runtime": session.xr_runtime,
+        "app_version": session.app_version,
+        "scene_id": session.scene_id,
+        "user_id": session.user_id,
+        "project_id": session.project_id,
+        "config": session.config,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "duration_seconds": session.duration_seconds,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+    }
+
+
 @router.get("/test-sessions")
 async def list_test_sessions(
     skip: int = Query(0, ge=0),
@@ -99,7 +154,7 @@ async def list_test_sessions(
 
     total = query.count()
     sessions = query.order_by(desc(TestSession.created_at)).offset(skip).limit(limit).all()
-    return {"total": total, "items": sessions}
+    return {"total": total, "items": [_session_response(session) for session in sessions]}
 
 
 @router.get("/test-sessions/{session_id}")
@@ -114,7 +169,7 @@ async def get_test_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="测试会话不存在",
         )
-    return session
+    return _session_response(session)
 
 
 @router.post("/test-sessions")
@@ -149,7 +204,8 @@ async def create_test_session(
         details={"name": session_data.name},
     )
 
-    return session
+    db.refresh(session)
+    return _session_response(session)
 
 
 @router.post("/test-sessions/{session_id}/start")
@@ -173,7 +229,7 @@ async def start_test_session(
         details={"action": "start"},
     )
 
-    return session
+    return _session_response(session)
 
 
 @router.post("/test-sessions/{session_id}/stop")
@@ -198,7 +254,7 @@ async def stop_test_session(
         details={"action": "stop", "status": status.value},
     )
 
-    return session
+    return _session_response(session)
 
 
 @router.post("/test-sessions/{session_id}/samples")
@@ -261,6 +317,9 @@ async def add_performance_samples_batch(
         )
 
     objects = []
+    timestamps: list[datetime] = []
+    first_device_info: dict = {}
+    first_sample: dict = payload.samples[0] if payload.samples else {}
     for item in payload.samples:
         extra_metrics = item.get("extra_metrics") or item.get("extraMetrics") or {}
         if not isinstance(extra_metrics, dict):
@@ -270,9 +329,14 @@ async def add_performance_samples_batch(
         if isinstance(render_quality, dict):
             extra_metrics["render_quality"] = render_quality
 
-        timestamp = item.get("timestamp") or datetime.utcnow()
-        if isinstance(timestamp, str):
-            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        device_info = _device_info_from_sample(item)
+        if device_info:
+            extra_metrics["device_info"] = device_info
+            if not first_device_info:
+                first_device_info = device_info
+
+        timestamp = _parse_timestamp(item.get("timestamp"))
+        timestamps.append(timestamp)
 
         objects.append(
             PerformanceSample(
@@ -303,9 +367,70 @@ async def add_performance_samples_batch(
         )
 
     db.bulk_save_objects(objects)
+    if timestamps:
+        first_ts = min(timestamps)
+        last_ts = max(timestamps)
+        session.started_at = session.started_at or first_ts
+        session.ended_at = last_ts
+        session.duration_seconds = max(0.0, (last_ts - session.started_at).total_seconds())
+        session.status = TestSessionStatus.COMPLETED.value
+
+    upload_session = payload.session or {}
+    if isinstance(upload_session, dict):
+        session.app_version = _first_value(
+            session.app_version,
+            upload_session.get("appVersion"),
+            upload_session.get("productName"),
+        )
+        unity_version = upload_session.get("unityVersion")
+    else:
+        unity_version = None
+
+    device_info = first_device_info
+    if device_info:
+        session.device_model = _first_value(
+            session.device_model,
+            device_info.get("deviceModel"),
+            device_info.get("deviceName"),
+            first_sample.get("xrDeviceName"),
+        )
+        session.os_version = _first_value(session.os_version, device_info.get("operatingSystem"))
+        _merge_session_config(
+            session,
+            {
+                "device_name": _first_value(device_info.get("deviceName"), device_info.get("deviceModel")),
+                "device_model": device_info.get("deviceModel"),
+                "os_version": device_info.get("operatingSystem"),
+                "cpu_model": device_info.get("processorType"),
+                "processor_count": device_info.get("processorCount"),
+                "gpu_model": device_info.get("graphicsDeviceName"),
+                "gpu_vendor": device_info.get("graphicsDeviceVendor"),
+                "gpu_version": device_info.get("graphicsDeviceVersion"),
+                "gpu_memory_mb": device_info.get("graphicsMemorySize"),
+                "system_memory_mb": device_info.get("systemMemorySize"),
+                "ram_gb": round(device_info.get("systemMemorySize", 0) / 1024, 2)
+                if isinstance(device_info.get("systemMemorySize"), (int, float))
+                else None,
+                "screen_resolution": device_info.get("screenResolution") or first_sample.get("screenResolution"),
+                "unity_version": unity_version,
+                "xr_device_name": first_sample.get("xrDeviceName"),
+                "sample_count": len(objects),
+            },
+        )
+    else:
+        _merge_session_config(session, {"sample_count": len(objects), "unity_version": unity_version})
+
     db.commit()
 
-    return {"inserted": len(objects), "session_id": session_id}
+    db.refresh(session)
+    return {
+        "inserted": len(objects),
+        "session_id": session_id,
+        "status": session.status.value if hasattr(session.status, "value") else session.status,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "duration_seconds": session.duration_seconds,
+    }
 
 
 @router.get("/test-sessions/{session_id}/samples")
