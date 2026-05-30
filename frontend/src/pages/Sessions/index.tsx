@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card,
   Table,
@@ -11,6 +11,7 @@ import {
   Descriptions,
   Modal,
   Tabs,
+  message,
 } from 'antd';
 import {
   SearchOutlined,
@@ -23,6 +24,7 @@ import {
   EyeOutlined,
 } from '@ant-design/icons';
 import type { TestSession } from '@/types';
+import { sessionsApi } from '@/api/sessions';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -213,11 +215,48 @@ const statusConfig: Record<string, { color: string; text: string; icon: React.Re
 };
 
 const Sessions: React.FC = () => {
-  const [sessions] = useState<TestSession[]>(mockSessions);
+  const [sessions, setSessions] = useState<TestSession[]>(mockSessions);
+  const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedSession, setSelectedSession] = useState<TestSession | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+
+  useEffect(() => {
+    const loadSessions = async () => {
+      setLoading(true);
+      try {
+        const response = await sessionsApi.list({ limit: 100 });
+        const apiSessions: TestSession[] = response.items.map((session) => ({
+          ...session,
+          status: session.status as TestSession['status'],
+          task_name: session.name,
+          start_time: session.started_at || undefined,
+          end_time: session.ended_at,
+          device_info: {
+            device_name: session.device_model || '未知设备',
+            os_version: session.os_version || '-',
+            gpu_model: String(session.config?.['gpu_model'] || '-'),
+            cpu_model: String(session.config?.['cpu_model'] || '-'),
+            ram_gb: Number(session.config?.['ram_gb'] || 0),
+          },
+          scene_info: {
+            scene_name: String(session.config?.['scene_name'] || `场景 ${session.scene_id || '-'}`),
+            complexity: (session.config?.['complexity'] as NonNullable<TestSession['scene_info']>['complexity']) || 'medium',
+            render_pipeline: String(session.config?.['render_pipeline'] || 'URP'),
+          },
+        }));
+        if (apiSessions.length > 0) {
+          setSessions(apiSessions);
+        }
+      } catch {
+        message.warning('未能读取后端测试会话，当前显示内置演示数据');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadSessions();
+  }, []);
 
   const filteredSessions = sessions.filter((s) => {
     const matchSearch = (s.task_name || s.name || '').toLowerCase().includes(searchText.toLowerCase());
@@ -345,6 +384,7 @@ const Sessions: React.FC = () => {
         dataSource={filteredSessions}
         rowKey="id"
         pagination={{ pageSize: 10 }}
+        loading={loading}
       />
 
       <Modal

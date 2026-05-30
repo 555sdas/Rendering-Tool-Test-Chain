@@ -59,6 +59,10 @@ class PerformanceSampleCreate(BaseModel):
     extra_metrics: Optional[dict] = None
 
 
+class PerformanceSampleBatchCreate(BaseModel):
+    samples: list[dict] = Field(..., min_length=1)
+
+
 class TestTaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
@@ -240,6 +244,68 @@ async def add_performance_sample(
     )
 
     return sample
+
+
+@router.post("/test-sessions/{session_id}/samples/batch")
+async def add_performance_samples_batch(
+    session_id: int,
+    payload: PerformanceSampleBatchCreate,
+    current_user: User = Depends(require_permission(Permission.TEST_EXECUTE)),
+    db: Session = Depends(get_db),
+):
+    session = db.query(TestSession).filter(TestSession.id == session_id).first()
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="测试会话不存在",
+        )
+
+    objects = []
+    for item in payload.samples:
+        extra_metrics = item.get("extra_metrics") or item.get("extraMetrics") or {}
+        if not isinstance(extra_metrics, dict):
+            extra_metrics = {}
+
+        render_quality = item.get("render_quality") or item.get("renderQuality")
+        if isinstance(render_quality, dict):
+            extra_metrics["render_quality"] = render_quality
+
+        timestamp = item.get("timestamp") or datetime.utcnow()
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+        objects.append(
+            PerformanceSample(
+                test_session_id=session_id,
+                timestamp=timestamp,
+                frame_time_ms=item.get("frame_time_ms") or item.get("frameTimeMs"),
+                fps=item.get("fps") or item.get("frameRate"),
+                cpu_usage_percent=item.get("cpu_usage_percent") or item.get("cpuUsagePercent"),
+                gpu_usage_percent=item.get("gpu_usage_percent") or item.get("gpuUsagePercent"),
+                memory_mb=item.get("memory_mb") or item.get("totalMemoryMB"),
+                battery_level=item.get("battery_level") or item.get("batteryLevel"),
+                battery_temperature=item.get("battery_temperature") or item.get("batteryTemperature"),
+                draw_calls=item.get("draw_calls") or item.get("drawCalls"),
+                triangle_count=item.get("triangle_count") or item.get("triangles"),
+                vertex_count=item.get("vertex_count") or item.get("vertices"),
+                set_pass_calls=item.get("set_pass_calls") or item.get("setPassCalls"),
+                texture_memory_mb=item.get("texture_memory_mb") or item.get("textureMemoryMB"),
+                mesh_memory_mb=item.get("mesh_memory_mb") or item.get("meshMemoryMB"),
+                render_texture_memory_mb=item.get("render_texture_memory_mb") or item.get("renderTextureMemoryMB"),
+                gc_collect_count=item.get("gc_collect_count") or item.get("gcCollectCount"),
+                gc_allocated_mb=item.get("gc_allocated_mb") or item.get("gcAllocatedMB"),
+                screen_resolution=item.get("screen_resolution") or item.get("screenResolution"),
+                tracking_state=item.get("tracking_state") or item.get("trackingState"),
+                prediction_error_ms=item.get("prediction_error_ms") or item.get("predictionErrorMs"),
+                pose_latency_ms=item.get("pose_latency_ms") or item.get("poseLatencyMs"),
+                extra_metrics=extra_metrics or None,
+            )
+        )
+
+    db.bulk_save_objects(objects)
+    db.commit()
+
+    return {"inserted": len(objects), "session_id": session_id}
 
 
 @router.get("/test-sessions/{session_id}/samples")

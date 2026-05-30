@@ -111,7 +111,18 @@ namespace XRDataCollector.Exporters
             sb.AppendLine($"      \"graphicsMemoryMB\": {sample.graphicsMemoryMB:F2},");
             sb.AppendLine($"      \"systemMemoryMB\": {sample.systemMemoryMB:F2},");
             sb.AppendLine($"      \"isXrActive\": {sample.isXrActive.ToString().ToLower()},");
-            sb.AppendLine($"      \"xrDeviceName\": \"{EscapeJson(sample.xrDeviceName ?? "")}\"");
+            sb.AppendLine($"      \"xrDeviceName\": \"{EscapeJson(sample.xrDeviceName ?? "")}\",");
+            sb.AppendLine($"      \"activeLightCount\": {sample.activeLightCount},");
+            sb.AppendLine($"      \"realtimeLightCount\": {sample.realtimeLightCount},");
+            sb.AppendLine($"      \"shadowCasterCount\": {sample.shadowCasterCount},");
+            sb.AppendLine($"      \"reflectionProbeCount\": {sample.reflectionProbeCount},");
+            sb.AppendLine($"      \"materialCount\": {sample.materialCount},");
+            sb.AppendLine($"      \"uniqueMaterialCount\": {sample.uniqueMaterialCount},");
+            sb.AppendLine($"      \"transparentMaterialCount\": {sample.transparentMaterialCount},");
+            sb.AppendLine($"      \"postProcessVolumeCount\": {sample.postProcessVolumeCount},");
+            sb.AppendLine($"      \"renderTextureCount\": {sample.renderTextureCount},");
+            sb.AppendLine($"      \"rigidbodyCount\": {sample.rigidbodyCount},");
+            sb.AppendLine($"      \"colliderCount\": {sample.colliderCount}");
 
             if (sample.deviceInfo != null)
             {

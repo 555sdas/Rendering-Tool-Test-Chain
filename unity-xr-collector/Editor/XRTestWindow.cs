@@ -3,6 +3,7 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using XRDataCollector.Core;
+using XRDataCollector.Data;
 using XRDataCollector.Exporters;
 
 namespace XRDataCollector.Editor
@@ -18,6 +19,7 @@ namespace XRDataCollector.Editor
         private Vector2 scrollPosition;
         private string exportPath = "";
         private string uploadUrl = "";
+        private string authToken = "";
         private bool showSessionInfo = true;
         private bool showLatestSample = true;
         private bool showSettings = false;
@@ -29,12 +31,15 @@ namespace XRDataCollector.Editor
 
         #endregion
 
+        private XRTestManager GetManager()
+        {
+            return XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+        }
+
         #region Menu Item
 
-        /// <summary>
-        /// 打开 XR 测试窗口
-        /// </summary>
-        [MenuItem("XR Test/Open Test Window", false, 0)]
         public static void ShowWindow()
         {
             var window = GetWindow<XRTestWindow>("XR Test");
@@ -50,25 +55,33 @@ namespace XRDataCollector.Editor
         {
             exportPath = Path.Combine(Application.persistentDataPath, "XRTestData");
 
-            if (XRTestManager.Instance != null)
+            var manager = GetManager();
+            if (manager != null)
             {
-                XRTestManager.Instance.OnSampleCollected += OnSampleCollected;
-                XRTestManager.Instance.OnSessionStarted += OnSessionStarted;
-                XRTestManager.Instance.OnSessionStopped += OnSessionStopped;
-                XRTestManager.Instance.OnDataExported += OnDataExported;
-                XRTestManager.Instance.OnDataUploaded += OnDataUploaded;
+                if (manager.Config != null)
+                {
+                    uploadUrl = manager.Config.uploadUrl;
+                    authToken = manager.Config.authToken;
+                }
+
+                manager.OnSampleCollected += OnSampleCollected;
+                manager.OnSessionStarted += OnSessionStarted;
+                manager.OnSessionStopped += OnSessionStopped;
+                manager.OnDataExported += OnDataExported;
+                manager.OnDataUploaded += OnDataUploaded;
             }
         }
 
         private void OnDisable()
         {
-            if (XRTestManager.Instance != null)
+            var manager = GetManager();
+            if (manager != null)
             {
-                XRTestManager.Instance.OnSampleCollected -= OnSampleCollected;
-                XRTestManager.Instance.OnSessionStarted -= OnSessionStarted;
-                XRTestManager.Instance.OnSessionStopped -= OnSessionStopped;
-                XRTestManager.Instance.OnDataExported -= OnDataExported;
-                XRTestManager.Instance.OnDataUploaded -= OnDataUploaded;
+                manager.OnSampleCollected -= OnSampleCollected;
+                manager.OnSessionStarted -= OnSessionStarted;
+                manager.OnSessionStopped -= OnSessionStopped;
+                manager.OnDataExported -= OnDataExported;
+                manager.OnDataUploaded -= OnDataUploaded;
             }
         }
 
@@ -145,7 +158,8 @@ namespace XRDataCollector.Editor
             EditorGUILayout.LabelField("Control Panel", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
-            bool isCollecting = XRTestManager.Instance != null && XRTestManager.Instance.IsCollecting;
+            var manager = GetManager();
+            bool isCollecting = manager != null && manager.IsCollecting;
 
             EditorGUILayout.BeginHorizontal();
 
@@ -180,9 +194,9 @@ namespace XRDataCollector.Editor
             EditorGUILayout.LabelField($"Status: {statusText}", statusStyle);
             GUI.color = Color.white;
 
-            if (XRTestManager.Instance != null)
+            if (manager != null)
             {
-                EditorGUILayout.LabelField($"Samples Collected: {XRTestManager.Instance.GetSampleCount()}");
+                EditorGUILayout.LabelField($"Samples Collected: {manager.GetSampleCount()}");
             }
 
             EditorGUILayout.EndVertical();
@@ -196,9 +210,10 @@ namespace XRDataCollector.Editor
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            if (XRTestManager.Instance != null && XRTestManager.Instance.Session != null)
+            var manager = GetManager();
+            if (manager != null && manager.Session != null)
             {
-                var session = XRTestManager.Instance.Session;
+                var session = manager.Session;
 
                 EditorGUILayout.LabelField("Session Name:", session.SessionName);
                 EditorGUILayout.LabelField("Session ID:", session.SessionId);
@@ -227,9 +242,10 @@ namespace XRDataCollector.Editor
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            if (XRTestManager.Instance != null)
+            var manager = GetManager();
+            if (manager != null)
             {
-                var sample = XRTestManager.Instance.GetLatestSample();
+                var sample = manager.GetLatestSample();
 
                 if (sample != null)
                 {
@@ -253,7 +269,7 @@ namespace XRDataCollector.Editor
             }
             else
             {
-                EditorGUILayout.HelpBox("XRTestManager not found in scene.", MessageType.Warning);
+                EditorGUILayout.HelpBox("XRTestManager not found in scene. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Warning);
             }
 
             EditorGUILayout.EndVertical();
@@ -303,6 +319,7 @@ namespace XRDataCollector.Editor
             EditorGUILayout.Space(5);
 
             uploadUrl = EditorGUILayout.TextField("Upload URL:", uploadUrl);
+            authToken = EditorGUILayout.PasswordField("Bearer Token:", authToken);
 
             EditorGUILayout.Space(5);
 
@@ -324,9 +341,10 @@ namespace XRDataCollector.Editor
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            if (XRTestManager.Instance != null && XRTestManager.Instance.Config != null)
+            var manager = GetManager();
+            if (manager != null && manager.Config != null)
             {
-                var config = XRTestManager.Instance.Config;
+                var config = manager.Config;
 
                 EditorGUI.BeginChangeCheck();
 
@@ -334,6 +352,9 @@ namespace XRDataCollector.Editor
                 config.collectInterval = EditorGUILayout.Slider("Collect Interval (s):", config.collectInterval, 0.1f, 10f);
                 config.autoStart = EditorGUILayout.Toggle("Auto Start:", config.autoStart);
                 config.autoExportOnQuit = EditorGUILayout.Toggle("Auto Export On Quit:", config.autoExportOnQuit);
+                config.enableNetworkUpload = EditorGUILayout.Toggle("Enable Network Upload:", config.enableNetworkUpload);
+                config.uploadUrl = EditorGUILayout.TextField("Upload URL:", config.uploadUrl);
+                config.authToken = EditorGUILayout.PasswordField("Bearer Token:", config.authToken);
 
                 EditorGUILayout.Space(5);
                 EditorGUILayout.LabelField("Collectors", EditorStyles.boldLabel);
@@ -347,12 +368,12 @@ namespace XRDataCollector.Editor
 
                 if (EditorGUI.EndChangeCheck())
                 {
-                    EditorUtility.SetDirty(XRTestManager.Instance);
+                    EditorUtility.SetDirty(manager);
                 }
             }
             else
             {
-                EditorGUILayout.HelpBox("XRTestManager not found or not configured.", MessageType.Info);
+                EditorGUILayout.HelpBox("XRTestManager not found. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Info);
             }
 
             EditorGUILayout.EndVertical();
@@ -373,31 +394,34 @@ namespace XRDataCollector.Editor
 
         private void StartCollection()
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 ShowStatus("XRTestManager not found. Please add it to a GameObject in the scene.", MessageType.Error);
                 return;
             }
 
-            XRTestManager.Instance.StartCollection();
+            manager.StartCollection();
         }
 
         private void StopCollection()
         {
-            if (XRTestManager.Instance == null) return;
+            var manager = GetManager();
+            if (manager == null) return;
 
-            XRTestManager.Instance.StopCollection();
+            manager.StopCollection();
         }
 
         private void ExportData(ExportFormat format)
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 ShowStatus("XRTestManager not found.", MessageType.Error);
                 return;
             }
 
-            if (XRTestManager.Instance.GetSampleCount() == 0)
+            if (manager.GetSampleCount() == 0)
             {
                 ShowStatus("No samples to export.", MessageType.Warning);
                 return;
@@ -427,7 +451,7 @@ namespace XRDataCollector.Editor
                     Directory.CreateDirectory(exportPath);
                 }
 
-                XRTestManager.Instance.ExportData(exporter, filePath);
+                manager.ExportData(exporter, filePath);
             }
             catch (Exception e)
             {
@@ -437,13 +461,14 @@ namespace XRDataCollector.Editor
 
         private void UploadData()
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 ShowStatus("XRTestManager not found.", MessageType.Error);
                 return;
             }
 
-            if (XRTestManager.Instance.GetSampleCount() == 0)
+            if (manager.GetSampleCount() == 0)
             {
                 ShowStatus("No samples to upload.", MessageType.Warning);
                 return;
@@ -455,7 +480,7 @@ namespace XRDataCollector.Editor
                 return;
             }
 
-            XRTestManager.Instance.UploadData(uploadUrl);
+            manager.UploadData(uploadUrl, authToken);
             ShowStatus("Uploading data...", MessageType.Info);
         }
 
@@ -463,7 +488,7 @@ namespace XRDataCollector.Editor
 
         #region Event Handlers
 
-        private void OnSampleCollected(Data.PerformanceSample sample)
+        private void OnSampleCollected(PerformanceSample sample)
         {
             Repaint();
         }

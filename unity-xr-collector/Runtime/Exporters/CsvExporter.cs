@@ -102,6 +102,17 @@ namespace XRDataCollector.Exporters
                 "SystemMemory(MB)," +
                 "XRActive," +
                 "XRDeviceName," +
+                "ActiveLights," +
+                "RealtimeLights," +
+                "ShadowCasters," +
+                "ReflectionProbes," +
+                "Materials," +
+                "UniqueMaterials," +
+                "TransparentMaterials," +
+                "PostProcessVolumes," +
+                "RenderTextures," +
+                "Rigidbodies," +
+                "Colliders," +
                 "DeviceModel," +
                 "OperatingSystem," +
                 "ProcessorType," +
@@ -127,6 +138,17 @@ namespace XRDataCollector.Exporters
             sb.Append($"{sample.systemMemoryMB:F2},");
             sb.Append($"{sample.isXrActive},");
             sb.Append($"{EscapeCsv(sample.xrDeviceName ?? "")},");
+            sb.Append($"{sample.activeLightCount},");
+            sb.Append($"{sample.realtimeLightCount},");
+            sb.Append($"{sample.shadowCasterCount},");
+            sb.Append($"{sample.reflectionProbeCount},");
+            sb.Append($"{sample.materialCount},");
+            sb.Append($"{sample.uniqueMaterialCount},");
+            sb.Append($"{sample.transparentMaterialCount},");
+            sb.Append($"{sample.postProcessVolumeCount},");
+            sb.Append($"{sample.renderTextureCount},");
+            sb.Append($"{sample.rigidbodyCount},");
+            sb.Append($"{sample.colliderCount},");
 
             if (sample.deviceInfo != null)
             {

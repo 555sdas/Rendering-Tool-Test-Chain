@@ -30,7 +30,7 @@ namespace XRDataCollector.Network
         /// <param name="session">测试会话信息</param>
         /// <param name="url">上传目标地址</param>
         /// <param name="callback">上传完成回调，参数为是否成功</param>
-        public void UploadAsync(List<PerformanceSample> samples, XRTestSession session, string url, Action<bool> callback)
+        public void UploadAsync(List<PerformanceSample> samples, XRTestSession session, string url, string authToken, Action<bool> callback)
         {
             if (samples == null || samples.Count == 0)
             {
@@ -55,7 +55,7 @@ namespace XRDataCollector.Network
             }
 
             string jsonPayload = BuildJsonPayload(samples, session);
-            host.StartCoroutine(UploadCoroutine(url, jsonPayload, callback));
+            host.StartCoroutine(UploadCoroutine(url, jsonPayload, authToken, callback));
         }
 
         #endregion
@@ -77,7 +77,7 @@ namespace XRDataCollector.Network
             return coroutineHost;
         }
 
-        private IEnumerator UploadCoroutine(string url, string jsonPayload, Action<bool> callback)
+        private IEnumerator UploadCoroutine(string url, string jsonPayload, string authToken, Action<bool> callback)
         {
             byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
 
@@ -86,6 +86,10 @@ namespace XRDataCollector.Network
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
+                if (!string.IsNullOrEmpty(authToken))
+                {
+                    request.SetRequestHeader("Authorization", "Bearer " + authToken);
+                }
                 request.timeout = 30;
 
                 yield return request.SendWebRequest();
@@ -146,7 +150,20 @@ namespace XRDataCollector.Network
                 sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
                 sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
                 sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
-                sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2}");
+                sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
+                sb.AppendLine("      \"renderQuality\": {");
+                sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
+                sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
+                sb.AppendLine($"        \"shadow_caster_count\": {s.shadowCasterCount},");
+                sb.AppendLine($"        \"reflection_probe_count\": {s.reflectionProbeCount},");
+                sb.AppendLine($"        \"material_count\": {s.materialCount},");
+                sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
+                sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
+                sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
+                sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
+                sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
+                sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
+                sb.AppendLine("      }");
                 sb.Append("    }");
                 sb.AppendLine(i < samples.Count - 1 ? "," : "");
             }

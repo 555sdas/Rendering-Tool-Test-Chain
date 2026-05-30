@@ -104,6 +104,65 @@ namespace XRDataCollector.Data
 
         #endregion
 
+        #region Render Quality Metrics
+
+        /// <summary>
+        /// 场景活动光源数量
+        /// </summary>
+        public int activeLightCount;
+
+        /// <summary>
+        /// 实时光源数量
+        /// </summary>
+        public int realtimeLightCount;
+
+        /// <summary>
+        /// 阴影投射渲染器数量
+        /// </summary>
+        public int shadowCasterCount;
+
+        /// <summary>
+        /// 反射探针数量
+        /// </summary>
+        public int reflectionProbeCount;
+
+        /// <summary>
+        /// 材质槽总数
+        /// </summary>
+        public int materialCount;
+
+        /// <summary>
+        /// 去重材质数量
+        /// </summary>
+        public int uniqueMaterialCount;
+
+        /// <summary>
+        /// 透明材质数量
+        /// </summary>
+        public int transparentMaterialCount;
+
+        /// <summary>
+        /// 后处理 Volume 数量
+        /// </summary>
+        public int postProcessVolumeCount;
+
+        /// <summary>
+        /// RenderTexture 资源数量
+        /// </summary>
+        public int renderTextureCount;
+
+        /// <summary>
+        /// 刚体数量
+        /// </summary>
+        public int rigidbodyCount;
+
+        /// <summary>
+        /// 碰撞体数量
+        /// </summary>
+        public int colliderCount;
+
+        #endregion
+
         #region Device Info
 
         /// <summary>

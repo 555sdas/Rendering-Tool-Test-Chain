@@ -10,6 +10,7 @@ from app.models.test_report import TestReport, ReportFormat
 from app.core.permissions import Permission, require_permission, get_current_user
 from app.services.audit_service import log_audit
 from app.services.export_service import ExportService
+from app.services.report_generation_service import ReportGenerationService
 
 router = APIRouter(prefix="/test-reports", tags=["测试报告"])
 
@@ -28,6 +29,11 @@ class TestReportUpdate(BaseModel):
     project_id: Optional[int] = None
     test_session_ids: Optional[list[int]] = None
     format: Optional[str] = None
+
+
+class GenerateSessionReportRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
 
 
 class TestReportResponse(BaseModel):
@@ -108,6 +114,38 @@ async def create_test_report(
         details={"title": report_data.title},
     )
 
+    return report
+
+
+@router.post("/generate-from-session/{session_id}", response_model=TestReportResponse)
+async def generate_report_from_session(
+    request: Request,
+    session_id: int,
+    report_data: GenerateSessionReportRequest | None = None,
+    current_user: User = Depends(require_permission(Permission.REPORT_CREATE)),
+    db: Session = Depends(get_db),
+):
+    service = ReportGenerationService(db)
+    try:
+        report = service.generate_session_html_report(
+            test_session_id=session_id,
+            creator_id=current_user.id,
+            title=report_data.title if report_data else None,
+            description=report_data.description if report_data else None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    await log_audit(
+        db=db,
+        action="report_generate",
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else None,
+        resource_type="test_report",
+        resource_id=str(report.id),
+        details={"session_id": session_id, "file_path": report.file_path},
+    )
     return report
 
 

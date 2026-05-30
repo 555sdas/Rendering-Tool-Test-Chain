@@ -7,6 +7,7 @@ from app.routers.performance_analysis import router as performance_analysis_rout
 from app.routers.test_reports import router as test_reports_router
 from app.routers.exports import router as exports_router
 from app.routers.audit_logs import router as audit_logs_router
+from app.routers.cloud_ar import router as cloud_ar_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "test_reports_router",
     "exports_router",
     "audit_logs_router",
+    "cloud_ar_router",
 ]

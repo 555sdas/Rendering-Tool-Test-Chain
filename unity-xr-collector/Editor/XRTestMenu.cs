@@ -2,6 +2,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using XRDataCollector.Core;
+using XRDataCollector.Exporters;
 
 namespace XRDataCollector.Editor
 {
@@ -11,6 +12,13 @@ namespace XRDataCollector.Editor
     /// </summary>
     public static class XRTestMenu
     {
+        private static XRTestManager GetManager()
+        {
+            return XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : Object.FindObjectOfType<XRTestManager>();
+        }
+
         #region Window Menu
 
         /// <summary>
@@ -32,14 +40,15 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Start Collection", false, 100)]
         public static void StartCollection()
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 Debug.LogWarning("[XRTestMenu] XRTestManager not found. Please add it to a GameObject in the scene.");
                 EditorUtility.DisplayDialog("XR Test", "XRTestManager not found in scene. Please add it to a GameObject first.", "OK");
                 return;
             }
 
-            XRTestManager.Instance.StartCollection();
+            manager.StartCollection();
             Debug.Log("[XRTestMenu] Collection started.");
         }
 
@@ -49,13 +58,14 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Stop Collection", false, 101)]
         public static void StopCollection()
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 Debug.LogWarning("[XRTestMenu] XRTestManager not found.");
                 return;
             }
 
-            XRTestManager.Instance.StopCollection();
+            manager.StopCollection();
             Debug.Log("[XRTestMenu] Collection stopped.");
         }
 
@@ -65,14 +75,15 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Clear Samples", false, 102)]
         public static void ClearSamples()
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 Debug.LogWarning("[XRTestMenu] XRTestManager not found.");
                 return;
             }
 
-            int count = XRTestManager.Instance.GetSampleCount();
-            XRTestManager.Instance.ClearSamples();
+            int count = manager.GetSampleCount();
+            manager.ClearSamples();
             Debug.Log($"[XRTestMenu] Cleared {count} samples.");
         }
 
@@ -100,13 +111,14 @@ namespace XRDataCollector.Editor
 
         private static void ExportData(ExportFormat format)
         {
-            if (XRTestManager.Instance == null)
+            var manager = GetManager();
+            if (manager == null)
             {
                 EditorUtility.DisplayDialog("XR Test", "XRTestManager not found in scene.", "OK");
                 return;
             }
 
-            if (XRTestManager.Instance.GetSampleCount() == 0)
+            if (manager.GetSampleCount() == 0)
             {
                 EditorUtility.DisplayDialog("XR Test", "No samples to export.", "OK");
                 return;
@@ -130,7 +142,7 @@ namespace XRDataCollector.Editor
                     ? new Exporters.JsonExporter()
                     : new Exporters.CsvExporter();
 
-                XRTestManager.Instance.ExportData(exporter, path);
+                manager.ExportData(exporter, path);
                 EditorUtility.DisplayDialog("XR Test", $"Data exported to:\n{path}", "OK");
             }
             catch (System.Exception e)
@@ -196,7 +208,8 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Start Collection", true)]
         public static bool ValidateStartCollection()
         {
-            return XRTestManager.Instance != null && !XRTestManager.Instance.IsCollecting;
+            var manager = GetManager();
+            return manager != null && !manager.IsCollecting;
         }
 
         /// <summary>
@@ -205,7 +218,8 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Stop Collection", true)]
         public static bool ValidateStopCollection()
         {
-            return XRTestManager.Instance != null && XRTestManager.Instance.IsCollecting;
+            var manager = GetManager();
+            return manager != null && manager.IsCollecting;
         }
 
         /// <summary>
@@ -214,7 +228,8 @@ namespace XRDataCollector.Editor
         [MenuItem("XR Test/Session/Clear Samples", true)]
         public static bool ValidateClearSamples()
         {
-            return XRTestManager.Instance != null && XRTestManager.Instance.GetSampleCount() > 0;
+            var manager = GetManager();
+            return manager != null && manager.GetSampleCount() > 0;
         }
 
         #endregion

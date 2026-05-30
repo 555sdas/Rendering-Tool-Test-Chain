@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress } from 'antd';
 import {
   LineChart,
   Line,
@@ -15,6 +15,8 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
+import { sessionsApi, type PerformanceSample } from '@/api/sessions';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -71,7 +73,7 @@ const pieData = [
   { name: '长帧', value: 25, color: '#8b5cf6' },
 ];
 
-const sessionOptions = [
+const fallbackSessionOptions = [
   { value: 'session1', label: 'Quest 3 - VR大空间' },
   { value: 'session2', label: 'Quest 2 - 标准场景' },
   { value: 'session3', label: 'PICO 4 - 协同场景' },
@@ -79,6 +81,57 @@ const sessionOptions = [
 
 const Analysis: React.FC = () => {
   const [selectedSessions, setSelectedSessions] = useState<string[]>(['session1', 'session2']);
+  const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
+  const [fullReport, setFullReport] = useState<FullReport | null>(null);
+  const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
+
+  useEffect(() => {
+    const loadSessions = async () => {
+      try {
+        const response = await sessionsApi.list({ limit: 50 });
+        if (response.items.length > 0) {
+          const options = response.items.map((session) => ({
+            value: String(session.id),
+            label: session.name,
+          }));
+          setSessionOptions(options);
+          setSelectedSessions([options[0].value]);
+        }
+      } catch {
+        message.warning('未能读取后端会话，当前显示内置分析样例');
+      }
+    };
+    loadSessions();
+  }, []);
+
+  useEffect(() => {
+    const sessionId = Number(selectedSessions[0]);
+    if (!Number.isFinite(sessionId)) {
+      setFullReport(null);
+      setSampleChartData([]);
+      return;
+    }
+
+    const loadAnalysis = async () => {
+      try {
+        const [report, samples] = await Promise.all([
+          analysisApi.getFullReport(sessionId),
+          sessionsApi.getSamples(sessionId, { limit: 300 }),
+        ]);
+        setFullReport(report);
+        setSampleChartData(samples.slice(0, 120).map((sample: PerformanceSample, index) => ({
+          time: `${index}s`,
+          fps: Number(sample.fps || 0),
+          cpu: Number(sample.cpu_usage_percent || 0),
+          gpu: Number(sample.gpu_usage_percent || 0),
+          memory: Number(((sample.memory_mb || 0) / 1024).toFixed(2)),
+        })));
+      } catch {
+        message.warning('未能读取后端分析结果，当前显示内置分析样例');
+      }
+    };
+    loadAnalysis();
+  }, [selectedSessions]);
 
   const comparisonColumns = [
     {
@@ -119,6 +172,57 @@ const Analysis: React.FC = () => {
     },
   ];
 
+  const renderQuality = fullReport?.render_quality_assessment;
+  const qualityColumns = [
+    {
+      title: '维度',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text: string) => <strong>{text}</strong>,
+    },
+    {
+      title: '得分',
+      dataIndex: 'score',
+      key: 'score',
+      width: 180,
+      render: (value: number) => <Progress percent={Math.round(value)} size="small" />,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (value: string) => {
+        const color = value === '通过' ? 'green' : value === '需关注' ? 'orange' : 'red';
+        return <Tag color={color}>{value}</Tag>;
+      },
+    },
+    {
+      title: '主要依据',
+      key: 'metrics',
+      render: (_: unknown, record: RenderQualityCategory) => (
+        <span>
+          {Object.entries(record.metrics)
+            .filter(([, value]) => value !== null && value !== undefined)
+            .slice(0, 4)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join('；') || '暂无专项采集指标'}
+        </span>
+      ),
+    },
+    {
+      title: '扣分项',
+      key: 'deductions',
+      render: (_: unknown, record: RenderQualityCategory) => (
+        <span>
+          {record.deductions.length
+            ? record.deductions.map((item) => `${item.reason}(-${item.points})`).join('；')
+            : '无明显扣分项'}
+        </span>
+      ),
+    },
+  ];
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -141,22 +245,22 @@ const Analysis: React.FC = () => {
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="平均FPS" value={70.3} suffix="fps" valueStyle={{ color: '#3b82f6' }} />
+            <Statistic title="平均FPS" value={fullReport?.fps_analysis?.mean ?? 70.3} precision={1} suffix="fps" valueStyle={{ color: '#3b82f6' }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="P95帧时间" value={14.2} suffix="ms" valueStyle={{ color: '#f59e0b' }} />
+            <Statistic title="P95帧时间" value={fullReport?.frame_time_analysis?.p95_ms ?? 14.2} precision={1} suffix="ms" valueStyle={{ color: '#f59e0b' }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="掉帧率" value={3.2} suffix="%" valueStyle={{ color: '#ef4444' }} />
+            <Statistic title="掉帧率" value={((fullReport?.stability_summary?.dropped_frame_rate ?? 0.032) * 100)} precision={1} suffix="%" valueStyle={{ color: '#ef4444' }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="长帧次数" value={28} valueStyle={{ color: '#8b5cf6' }} />
+            <Statistic title="长帧次数" value={fullReport?.stability_summary?.long_frame_count ?? 28} valueStyle={{ color: '#8b5cf6' }} />
           </Card>
         </Col>
       </Row>
@@ -165,20 +269,26 @@ const Analysis: React.FC = () => {
         <TabPane tab="FPS趋势" key="fps">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={fpsData}>
+              <LineChart data={sampleChartData.length ? sampleChartData : fpsData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis domain={[0, 90]} />
                 <Tooltip />
                 <Legend />
-                {selectedSessions.includes('session1') && (
-                  <Line type="monotone" dataKey="session1" stroke="#3b82f6" name="Quest 3" strokeWidth={2} dot={false} />
-                )}
-                {selectedSessions.includes('session2') && (
-                  <Line type="monotone" dataKey="session2" stroke="#10b981" name="Quest 2" strokeWidth={2} dot={false} />
-                )}
-                {selectedSessions.includes('session3') && (
-                  <Line type="monotone" dataKey="session3" stroke="#f59e0b" name="PICO 4" strokeWidth={2} dot={false} />
+                {sampleChartData.length ? (
+                  <Line type="monotone" dataKey="fps" stroke="#3b82f6" name="FPS" strokeWidth={2} dot={false} />
+                ) : (
+                  <>
+                    {selectedSessions.includes('session1') && (
+                      <Line type="monotone" dataKey="session1" stroke="#3b82f6" name="Quest 3" strokeWidth={2} dot={false} />
+                    )}
+                    {selectedSessions.includes('session2') && (
+                      <Line type="monotone" dataKey="session2" stroke="#10b981" name="Quest 2" strokeWidth={2} dot={false} />
+                    )}
+                    {selectedSessions.includes('session3') && (
+                      <Line type="monotone" dataKey="session3" stroke="#f59e0b" name="PICO 4" strokeWidth={2} dot={false} />
+                    )}
+                  </>
                 )}
               </LineChart>
             </ResponsiveContainer>
@@ -229,19 +339,56 @@ const Analysis: React.FC = () => {
         <TabPane tab="资源占用" key="resources">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={resourceData}>
+              <LineChart data={sampleChartData.length ? sampleChartData : resourceData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis yAxisId="left" domain={[0, 100]} />
                 <YAxis yAxisId="right" orientation="right" domain={[0, 5]} />
                 <Tooltip />
                 <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%" strokeWidth={2} dot={false} />
+                <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%)" strokeWidth={2} dot={false} />
                 <Line yAxisId="left" type="monotone" dataKey="gpu" stroke="#ef4444" name="GPU (%)" strokeWidth={2} dot={false} />
                 <Line yAxisId="right" type="monotone" dataKey="memory" stroke="#10b981" name="内存 (GB)" strokeWidth={2} dot={false} />
                 <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存 (GB)" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
+          </Card>
+        </TabPane>
+
+        <TabPane tab="渲染质量" key="render-quality">
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={8}>
+              <Card>
+                <Statistic title="总体质量分" value={renderQuality?.overall_score ?? 0} precision={1} suffix="/ 100" />
+              </Card>
+            </Col>
+            <Col xs={24} sm={8}>
+              <Card>
+                <Statistic title="质量等级" value={renderQuality?.grade ?? '-'} />
+              </Card>
+            </Col>
+            <Col xs={24} sm={8}>
+              <Card>
+                <Statistic title="证据样本数" value={renderQuality?.evidence.sample_count ?? 0} />
+              </Card>
+            </Col>
+          </Row>
+          <Card
+            title="光照、材质、后处理与物理仿真评分"
+            extra={<Tag color={renderQuality?.evidence.has_runtime_quality_metrics ? 'blue' : 'orange'}>
+              {renderQuality?.evaluation_mode.type ?? '未评估'}
+            </Tag>}
+          >
+            <Table
+              columns={qualityColumns}
+              dataSource={renderQuality?.categories || []}
+              rowKey="key"
+              pagination={false}
+              size="middle"
+            />
+            <div style={{ color: '#64748b', marginTop: 12 }}>
+              {renderQuality?.evaluation_mode.description}
+            </div>
           </Card>
         </TabPane>
 
