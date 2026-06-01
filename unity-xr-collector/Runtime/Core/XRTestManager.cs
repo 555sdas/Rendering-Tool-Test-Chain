@@ -1,0 +1,371 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using XRDataCollector.Collectors;
+using XRDataCollector.Data;
+using XRDataCollector.Exporters;
+using XRDataCollector.Network;
+
+namespace XRDataCollector.Core
+{
+    /// <summary>
+    /// XR 测试数据管理器主类
+    /// 负责协调所有采集器、管理测试会话、处理数据导出和上传
+    /// </summary>
+    public class XRTestManager : MonoBehaviour
+    {
+        #region Singleton
+
+        public static XRTestManager Instance { get; private set; }
+
+        #endregion
+
+        #region Events
+
+        /// <summary>
+        /// 当新的性能样本采集完成时触发
+        /// </summary>
+        public event Action<PerformanceSample> OnSampleCollected;
+
+        /// <summary>
+        /// 当测试会话开始时触发
+        /// </summary>
+        public event Action OnSessionStarted;
+
+        /// <summary>
+        /// 当测试会话停止时触发
+        /// </summary>
+        public event Action OnSessionStopped;
+
+        /// <summary>
+        /// 当数据导出完成时触发
+        /// </summary>
+        public event Action<string> OnDataExported;
+
+        /// <summary>
+        /// 当数据上传完成时触发，参数为是否成功
+        /// </summary>
+        public event Action<bool> OnDataUploaded;
+
+        #endregion
+
+        #region Fields
+
+        [SerializeField]
+        private XRTestConfig config;
+
+        private XRTestSession session;
+        private List<IPerformanceCollector> collectors;
+        private List<PerformanceSample> samples;
+        private float collectTimer;
+        private bool isCollecting;
+
+        #endregion
+
+        #region Properties
+
+        /// <summary>
+        /// 当前是否正在采集数据
+        /// </summary>
+        public bool IsCollecting => isCollecting;
+
+        /// <summary>
+        /// 当前配置
+        /// </summary>
+        public XRTestConfig Config
+        {
+            get
+            {
+                EnsureRuntimeState();
+                return config;
+            }
+        }
+
+        /// <summary>
+        /// 当前会话信息
+        /// </summary>
+        public XRTestSession Session => session;
+
+        #endregion
+
+        #region Unity Lifecycle
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            EnsureRuntimeState();
+        }
+
+        private void Start()
+        {
+            EnsureRuntimeState();
+
+            InitializeCollectors();
+
+            if (config.autoStart)
+            {
+                StartCollection();
+            }
+        }
+
+        private void Update()
+        {
+            if (!isCollecting) return;
+
+            collectTimer += Time.unscaledDeltaTime;
+
+            if (collectTimer >= config.collectInterval)
+            {
+                collectTimer = 0f;
+                CollectSample();
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (isCollecting)
+            {
+                StopCollection();
+            }
+
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// 使用指定配置初始化管理器
+        /// </summary>
+        /// <param name="newConfig">测试配置</param>
+        public void Initialize(XRTestConfig newConfig)
+        {
+            config = newConfig ?? new XRTestConfig();
+            EnsureRuntimeState();
+            InitializeCollectors();
+        }
+
+        /// <summary>
+        /// 开始数据采集
+        /// </summary>
+        public void StartCollection()
+        {
+            EnsureRuntimeState();
+            if (collectors.Count == 0)
+            {
+                InitializeCollectors();
+            }
+            if (isCollecting) return;
+
+            session = new XRTestSession(config.sessionName);
+            session.Start();
+
+            samples.Clear();
+            collectTimer = 0f;
+            isCollecting = true;
+
+            foreach (var collector in collectors)
+            {
+                collector.StartCollecting();
+            }
+
+            OnSessionStarted?.Invoke();
+            Debug.Log($"[XRTestManager] Session '{config.sessionName}' started.");
+        }
+
+        /// <summary>
+        /// 停止数据采集
+        /// </summary>
+        public void StopCollection()
+        {
+            if (!isCollecting) return;
+
+            isCollecting = false;
+            session?.Stop();
+
+            foreach (var collector in collectors)
+            {
+                collector.StopCollecting();
+            }
+
+            OnSessionStopped?.Invoke();
+            Debug.Log($"[XRTestManager] Session '{config.sessionName}' stopped. Samples collected: {samples.Count}");
+        }
+
+        /// <summary>
+        /// 使用指定导出器导出数据
+        /// </summary>
+        /// <param name="exporter">数据导出器</param>
+        /// <param name="filePath">导出文件路径</param>
+        public void ExportData(IDataExporter exporter, string filePath)
+        {
+            if (exporter == null)
+            {
+                Debug.LogError("[XRTestManager] Exporter is null.");
+                return;
+            }
+
+            if (samples.Count == 0)
+            {
+                Debug.LogWarning("[XRTestManager] No samples to export.");
+                return;
+            }
+
+            try
+            {
+                exporter.Export(samples, session, filePath);
+                OnDataExported?.Invoke(filePath);
+                Debug.Log($"[XRTestManager] Data exported to: {filePath}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[XRTestManager] Export failed: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 上传数据到指定服务器
+        /// </summary>
+        /// <param name="url">上传地址</param>
+        public void UploadData(string url, string authToken = null)
+        {
+            if (samples.Count == 0)
+            {
+                Debug.LogWarning("[XRTestManager] No samples to upload.");
+                OnDataUploaded?.Invoke(false);
+                return;
+            }
+
+            var uploader = new TestDataUploader();
+            if (string.IsNullOrEmpty(url))
+            {
+                EnsureRuntimeState();
+                uploader.UploadAsync(samples, session, config, success =>
+                {
+                    OnDataUploaded?.Invoke(success);
+                });
+                return;
+            }
+
+            string token = string.IsNullOrEmpty(authToken) ? config?.authToken : authToken;
+            uploader.UploadAsync(samples, session, url, token, success =>
+            {
+                OnDataUploaded?.Invoke(success);
+            });
+        }
+
+        /// <summary>
+        /// 获取最新的性能样本
+        /// </summary>
+        /// <returns>最新样本，如果没有则返回 null</returns>
+        public PerformanceSample GetLatestSample()
+        {
+            if (samples.Count == 0) return null;
+            return samples[samples.Count - 1];
+        }
+
+        /// <summary>
+        /// 获取所有采集的样本（副本）
+        /// </summary>
+        /// <returns>样本列表副本</returns>
+        public List<PerformanceSample> GetAllSamples()
+        {
+            return new List<PerformanceSample>(samples);
+        }
+
+        /// <summary>
+        /// 获取样本数量
+        /// </summary>
+        /// <returns>已采集的样本总数</returns>
+        public int GetSampleCount()
+        {
+            return samples.Count;
+        }
+
+        /// <summary>
+        /// 清除所有已采集的样本
+        /// </summary>
+        public void ClearSamples()
+        {
+            samples.Clear();
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        private void InitializeCollectors()
+        {
+            EnsureRuntimeState();
+            collectors.Clear();
+
+            collectors.Add(new FrameRateCollector());
+            collectors.Add(new FrameTimeCollector());
+            collectors.Add(new CpuUsageCollector());
+            collectors.Add(new GpuUsageCollector());
+            collectors.Add(new MemoryCollector());
+            collectors.Add(new DeviceInfoCollector());
+            collectors.Add(new RenderQualityCollector());
+        }
+
+        private void Reset()
+        {
+            EnsureRuntimeState();
+        }
+
+        private void OnValidate()
+        {
+            EnsureRuntimeState();
+        }
+
+        private void EnsureRuntimeState()
+        {
+            if (config == null)
+            {
+                config = new XRTestConfig();
+            }
+
+            if (collectors == null)
+            {
+                collectors = new List<IPerformanceCollector>();
+            }
+
+            if (samples == null)
+            {
+                samples = new List<PerformanceSample>();
+            }
+        }
+
+        private void CollectSample()
+        {
+            var sample = new PerformanceSample
+            {
+                timestamp = DateTime.UtcNow,
+                sessionId = session?.SessionId ?? "unknown",
+                elapsedTime = session?.ElapsedTime ?? TimeSpan.Zero
+            };
+
+            foreach (var collector in collectors)
+            {
+                collector.Collect(ref sample);
+            }
+
+            samples.Add(sample);
+            OnSampleCollected?.Invoke(sample);
+        }
+
+        #endregion
+    }
+}

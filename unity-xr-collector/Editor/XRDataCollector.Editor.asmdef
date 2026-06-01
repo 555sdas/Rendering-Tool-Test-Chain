@@ -1,0 +1,18 @@
+{
+    "name": "XRDataCollector.Editor",
+    "rootNamespace": "XRDataCollector.Editor",
+    "references": [
+        "XRDataCollector.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,31 @@
+{
+  "name": "com.xr.testdatacollector",
+  "displayName": "XR Data Collector",
+  "version": "1.0.0",
+  "unity": "2022.3",
+  "description": "XR performance data collection and testing plugin for Unity. Supports frame rate, frame time, CPU/GPU usage, memory metrics, and device info collection with JSON/CSV export and HTTP upload capabilities.",
+  "keywords": [
+    "xr",
+    "vr",
+    "ar",
+    "performance",
+    "testing",
+    "data-collection",
+    "openxr"
+  ],
+  "author": {
+    "name": "XR Test Team",
+    "email": "xr-test@example.com"
+  },
+  "dependencies": {
+    "com.unity.xr.management": "4.4.0",
+    "com.unity.xr.openxr": "1.9.1"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Usage",
+      "description": "Basic example showing how to set up XR data collection in a scene.",
+      "path": "Samples~/BasicUsage"
+    }
+  ]
+}

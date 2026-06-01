@@ -1,0 +1,60 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+backend/.conda-test/
+
+# Node / frontend build outputs
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+.vite/
+coverage/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases, uploads and generated reports
+*.db
+*.sqlite
+*.sqlite3
+backend/xr_test.db
+backend/uploads/
+uploads/
+
+# Logs and generated test outputs
+logs/
+*.log
+boatattack-editmode*.xml
+boatattack-editmode*.log
+
+# IDE / OS local files
+.idea/
+.vscode/
+.trae/
+.DS_Store
+Thumbs.db
+
+# Unity generated project files and caches
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+MemoryCaptures/
+*.csproj
+*.sln
