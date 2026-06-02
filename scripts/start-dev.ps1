@@ -6,6 +6,9 @@ $FrontendScript = Join-Path $PSScriptRoot "start-frontend.ps1"
 
 $PowerShellExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
 if (!$PowerShellExe) {
+    $PowerShellExe = (Get-Command powershell -ErrorAction SilentlyContinue).Source
+}
+if (!$PowerShellExe) {
     $PowerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
 }
 

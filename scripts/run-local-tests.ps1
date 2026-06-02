@@ -3,15 +3,8 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $BackendDir = Join-Path $Root "backend"
 $FrontendDir = Join-Path $Root "frontend"
-$Python = Join-Path $BackendDir ".conda-test\python.exe"
-$Npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-
-if (!(Test-Path -LiteralPath $Python)) {
-    Write-Error "Python env not found: $Python"
-}
-if (!$Npm) {
-    $Npm = (Get-Command npm -ErrorAction Stop).Source
-}
+$Python = Get-Command python -ErrorAction Stop | Select-Object -ExpandProperty Source
+$Npm = (Get-Command npm -ErrorAction Stop).Source
 
 Write-Host "Running backend pytest..." -ForegroundColor Cyan
 Set-Location $BackendDir
