@@ -55,10 +55,18 @@ namespace XRDataCollector.Core
         private XRTestConfig config;
 
         private XRTestSession session;
-        private List<IPerformanceCollector> collectors;
+        private List<IPerformanceCollector> allCollectors;
+        private List<IPerformanceCollector> batchCollectors;
         private List<PerformanceSample> samples;
         private float collectTimer;
         private bool isCollecting;
+
+        private FrameRateCollector frameRateCollector;
+        private FrameTimeCollector frameTimeCollector;
+        private float cachedFrameRate;
+        private float cachedFrameTimeMs;
+        private int lastBatchFrameCount;
+        private float lastBatchRealTime;
 
         #endregion
 
@@ -122,10 +130,30 @@ namespace XRDataCollector.Core
 
             collectTimer += Time.unscaledDeltaTime;
 
+            int currentFrameCount = Time.frameCount;
+            float currentTime = Time.unscaledTime;
+            int framesPassed = currentFrameCount - lastBatchFrameCount;
+            float timePassed = currentTime - lastBatchRealTime;
+
+            if (framesPassed > 0 && timePassed > 0f)
+            {
+                cachedFrameRate = framesPassed / timePassed;
+            }
+            else if (Time.unscaledDeltaTime > 0f)
+            {
+                cachedFrameRate = 1f / Time.unscaledDeltaTime;
+            }
+
+            cachedFrameTimeMs = Time.unscaledDeltaTime * 1000f;
+
             if (collectTimer >= config.collectInterval)
             {
                 collectTimer = 0f;
+
                 CollectSample();
+
+                lastBatchFrameCount = Time.frameCount;
+                lastBatchRealTime = Time.unscaledTime;
             }
         }
 
@@ -163,7 +191,7 @@ namespace XRDataCollector.Core
         public void StartCollection()
         {
             EnsureRuntimeState();
-            if (collectors.Count == 0)
+            if (allCollectors.Count == 0)
             {
                 InitializeCollectors();
             }
@@ -176,10 +204,15 @@ namespace XRDataCollector.Core
             collectTimer = 0f;
             isCollecting = true;
 
-            foreach (var collector in collectors)
+            foreach (var collector in allCollectors)
             {
                 collector.StartCollecting();
             }
+
+            cachedFrameRate = 0f;
+            cachedFrameTimeMs = 0f;
+            lastBatchFrameCount = Time.frameCount;
+            lastBatchRealTime = Time.unscaledTime;
 
             OnSessionStarted?.Invoke();
             Debug.Log($"[XRTestManager] Session '{config.sessionName}' started.");
@@ -195,7 +228,7 @@ namespace XRDataCollector.Core
             isCollecting = false;
             session?.Stop();
 
-            foreach (var collector in collectors)
+            foreach (var collector in allCollectors)
             {
                 collector.StopCollecting();
             }
@@ -309,15 +342,31 @@ namespace XRDataCollector.Core
         private void InitializeCollectors()
         {
             EnsureRuntimeState();
-            collectors.Clear();
+            allCollectors.Clear();
+            batchCollectors.Clear();
 
-            collectors.Add(new FrameRateCollector());
-            collectors.Add(new FrameTimeCollector());
-            collectors.Add(new CpuUsageCollector());
-            collectors.Add(new GpuUsageCollector());
-            collectors.Add(new MemoryCollector());
-            collectors.Add(new DeviceInfoCollector());
-            collectors.Add(new RenderQualityCollector());
+            frameRateCollector = new FrameRateCollector();
+            frameTimeCollector = new FrameTimeCollector();
+
+            var cpuCollector = new CpuUsageCollector();
+            var gpuCollector = new GpuUsageCollector();
+            var memoryCollector = new MemoryCollector();
+            var deviceCollector = new DeviceInfoCollector();
+            var renderQualityCollector = new RenderQualityCollector();
+
+            allCollectors.Add(frameRateCollector);
+            allCollectors.Add(frameTimeCollector);
+            allCollectors.Add(cpuCollector);
+            allCollectors.Add(gpuCollector);
+            allCollectors.Add(memoryCollector);
+            allCollectors.Add(deviceCollector);
+            allCollectors.Add(renderQualityCollector);
+
+            batchCollectors.Add(cpuCollector);
+            batchCollectors.Add(gpuCollector);
+            batchCollectors.Add(memoryCollector);
+            batchCollectors.Add(deviceCollector);
+            batchCollectors.Add(renderQualityCollector);
         }
 
         private void Reset()
@@ -337,9 +386,14 @@ namespace XRDataCollector.Core
                 config = new XRTestConfig();
             }
 
-            if (collectors == null)
+            if (allCollectors == null)
             {
-                collectors = new List<IPerformanceCollector>();
+                allCollectors = new List<IPerformanceCollector>();
+            }
+
+            if (batchCollectors == null)
+            {
+                batchCollectors = new List<IPerformanceCollector>();
             }
 
             if (samples == null)
@@ -354,10 +408,13 @@ namespace XRDataCollector.Core
             {
                 timestamp = DateTime.UtcNow,
                 sessionId = session?.SessionId ?? "unknown",
-                elapsedTime = session?.ElapsedTime ?? TimeSpan.Zero
+                elapsedTime = session?.ElapsedTime ?? TimeSpan.Zero,
+                frameRate = cachedFrameRate,
+                frameTimeMs = cachedFrameTimeMs,
+                rawFrameTimeMs = cachedFrameTimeMs
             };
 
-            foreach (var collector in collectors)
+            foreach (var collector in batchCollectors)
             {
                 collector.Collect(ref sample);
             }
