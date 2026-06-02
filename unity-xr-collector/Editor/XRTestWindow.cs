@@ -28,6 +28,7 @@ namespace XRDataCollector.Editor
         private float statusClearTime;
 
         private const float StatusDisplayDuration = 5f;
+        private const string PendingStartAfterPlayModeKey = "XRDataCollector.PendingStartAfterPlayMode";
 
         #endregion
 
@@ -54,6 +55,7 @@ namespace XRDataCollector.Editor
         private void OnEnable()
         {
             exportPath = Path.Combine(Application.persistentDataPath, "XRTestData");
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
 
             var manager = GetManager();
             if (manager != null)
@@ -74,6 +76,8 @@ namespace XRDataCollector.Editor
 
         private void OnDisable()
         {
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+
             var manager = GetManager();
             if (manager != null)
             {
@@ -196,6 +200,11 @@ namespace XRDataCollector.Editor
 
             if (manager != null)
             {
+                EditorGUILayout.LabelField($"Phase: {manager.CurrentCollectionPhase}");
+                if (manager.IsCollecting)
+                {
+                    EditorGUILayout.LabelField($"Phase Remaining: {manager.CurrentPhaseRemainingSeconds:F1} s");
+                }
                 EditorGUILayout.LabelField($"Samples Collected: {manager.GetSampleCount()}");
             }
 
@@ -250,6 +259,7 @@ namespace XRDataCollector.Editor
                 if (sample != null)
                 {
                     EditorGUILayout.LabelField("Timestamp:", sample.timestamp.ToLocalTime().ToString("HH:mm:ss.fff"));
+                    EditorGUILayout.LabelField("Phase:", sample.collectionPhase ?? "-");
                     EditorGUILayout.LabelField("Frame Rate:", $"{sample.frameRate:F1} FPS");
                     EditorGUILayout.LabelField("Frame Time:", $"{sample.frameTimeMs:F2} ms");
                     EditorGUILayout.LabelField("CPU Usage:", $"{sample.cpuUsagePercent:F1} %");
@@ -411,6 +421,14 @@ namespace XRDataCollector.Editor
 
         private void StartCollection()
         {
+            if (!EditorApplication.isPlaying)
+            {
+                SessionState.SetBool(PendingStartAfterPlayModeKey, true);
+                EditorApplication.isPlaying = true;
+                ShowStatus("Entering Play Mode. Collection will start automatically.", MessageType.Info);
+                return;
+            }
+
             var manager = GetManager();
             if (manager == null)
             {
@@ -533,6 +551,34 @@ namespace XRDataCollector.Editor
                 ShowStatus("Data upload failed.", MessageType.Error);
             }
             Repaint();
+        }
+
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state != PlayModeStateChange.EnteredPlayMode)
+            {
+                return;
+            }
+
+            if (!SessionState.GetBool(PendingStartAfterPlayModeKey, false))
+            {
+                return;
+            }
+
+            SessionState.SetBool(PendingStartAfterPlayModeKey, false);
+            EditorApplication.delayCall += StartPendingCollection;
+        }
+
+        private void StartPendingCollection()
+        {
+            var manager = GetManager();
+            if (manager == null)
+            {
+                ShowStatus("XRTestManager not found after entering Play Mode.", MessageType.Error);
+                return;
+            }
+
+            manager.StartCollection();
         }
 
         #endregion

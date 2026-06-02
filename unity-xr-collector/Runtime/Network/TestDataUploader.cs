@@ -279,28 +279,43 @@ namespace XRDataCollector.Network
                 sb.AppendLine("    {");
                 sb.AppendLine($"      \"timestamp\": \"{s.timestamp:O}\",");
                 sb.AppendLine($"      \"elapsedTime\": {s.elapsedTime.TotalSeconds:F3},");
-                sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
-                sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
-                sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
-                sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
-                sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
-                sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
-                sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
-                sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
-                AppendDeviceInfo(sb, s.deviceInfo);
-                sb.AppendLine("      \"renderQuality\": {");
-                sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
-                sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
-                sb.AppendLine($"        \"shadow_caster_count\": {s.shadowCasterCount},");
-                sb.AppendLine($"        \"reflection_probe_count\": {s.reflectionProbeCount},");
-                sb.AppendLine($"        \"material_count\": {s.materialCount},");
-                sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
-                sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
-                sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
-                sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
-                sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
-                sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
-                sb.AppendLine("      }");
+                sb.AppendLine($"      \"collectionPhase\": \"{EscapeJson(s.collectionPhase)}\",");
+
+                if (s.collectionPhase == "frame_rate")
+                {
+                    sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
+                    sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
+                    sb.AppendLine("      \"extraMetrics\": {");
+                    sb.AppendLine("        \"collection_phase\": \"frame_rate\"");
+                    sb.AppendLine("      }");
+                }
+                else
+                {
+                    sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
+                    sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
+                    sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
+                    sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
+                    sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
+                    sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
+                    AppendDeviceInfo(sb, s.deviceInfo);
+                    sb.AppendLine("      \"renderQuality\": {");
+                    sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
+                    sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
+                    sb.AppendLine($"        \"shadow_caster_count\": {s.shadowCasterCount},");
+                    sb.AppendLine($"        \"reflection_probe_count\": {s.reflectionProbeCount},");
+                    sb.AppendLine($"        \"material_count\": {s.materialCount},");
+                    sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
+                    sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
+                    sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
+                    sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
+                    sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
+                    sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
+                    sb.AppendLine("      },");
+                    sb.AppendLine("      \"extraMetrics\": {");
+                    sb.AppendLine("        \"collection_phase\": \"metrics\"");
+                    sb.AppendLine("      }");
+                }
+
                 sb.Append("    }");
                 sb.AppendLine(i < samples.Count - 1 ? "," : "");
             }
