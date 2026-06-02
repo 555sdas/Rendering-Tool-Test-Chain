@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -28,6 +29,10 @@ namespace XRDataCollector.Collectors
         public void StartCollecting()
         {
             ResetMetrics();
+            CollectLightingMetrics();
+            CollectMaterialMetrics();
+            CollectPostProcessingMetrics();
+            CollectPhysicsMetrics();
         }
 
         public void StopCollecting()
@@ -36,11 +41,6 @@ namespace XRDataCollector.Collectors
 
         public void Collect(ref PerformanceSample sample)
         {
-            CollectLightingMetrics();
-            CollectMaterialMetrics();
-            CollectPostProcessingMetrics();
-            CollectPhysicsMetrics();
-
             sample.activeLightCount = activeLightCount;
             sample.realtimeLightCount = realtimeLightCount;
             sample.shadowCasterCount = shadowCasterCount;
@@ -71,7 +71,7 @@ namespace XRDataCollector.Collectors
 
         private void CollectLightingMetrics()
         {
-            var lights = Object.FindObjectsOfType<Light>();
+            var lights = UnityEngine.Object.FindObjectsOfType<Light>();
             activeLightCount = 0;
             realtimeLightCount = 0;
 
@@ -87,7 +87,7 @@ namespace XRDataCollector.Collectors
             }
 
             shadowCasterCount = 0;
-            var renderers = Object.FindObjectsOfType<Renderer>();
+            var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
             foreach (var renderer in renderers)
             {
                 if (renderer == null || !renderer.enabled) continue;
@@ -97,7 +97,7 @@ namespace XRDataCollector.Collectors
                 }
             }
 
-            reflectionProbeCount = Object.FindObjectsOfType<ReflectionProbe>().Length;
+            reflectionProbeCount = UnityEngine.Object.FindObjectsOfType<ReflectionProbe>().Length;
         }
 
         private void CollectMaterialMetrics()
@@ -105,7 +105,7 @@ namespace XRDataCollector.Collectors
             materialCount = 0;
             transparentMaterialCount = 0;
             var uniqueMaterials = new HashSet<int>();
-            var renderers = Object.FindObjectsOfType<Renderer>();
+            var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
 
             foreach (var renderer in renderers)
             {
@@ -140,14 +140,23 @@ namespace XRDataCollector.Collectors
 
         private void CollectPostProcessingMetrics()
         {
-            postProcessVolumeCount = Object.FindObjectsOfType<Volume>().Length;
+            var volumeType = Type.GetType("UnityEngine.Rendering.Volume, Unity.RenderPipelines.Core.Runtime");
+            if (volumeType != null)
+            {
+                var volumes = UnityEngine.Object.FindObjectsOfType(volumeType);
+                postProcessVolumeCount = volumes.Length;
+            }
+            else
+            {
+                postProcessVolumeCount = 0;
+            }
             renderTextureCount = Resources.FindObjectsOfTypeAll<RenderTexture>().Length;
         }
 
         private void CollectPhysicsMetrics()
         {
-            rigidbodyCount = Object.FindObjectsOfType<Rigidbody>().Length;
-            colliderCount = Object.FindObjectsOfType<Collider>().Length;
+            rigidbodyCount = UnityEngine.Object.FindObjectsOfType<Rigidbody>().Length;
+            colliderCount = UnityEngine.Object.FindObjectsOfType<Collider>().Length;
         }
     }
 }
