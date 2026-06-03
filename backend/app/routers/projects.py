@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models.user import User
 from app.models.project import Project, ProjectStatus, ProjectType
+from app.models.test_session import TestSession
 from app.core.permissions import Permission, require_permission, get_current_user
 from app.services.audit_service import log_audit
 
@@ -41,6 +42,28 @@ class ProjectResponse(BaseModel):
         from_attributes = True
 
 
+def _session_response(session: TestSession) -> dict:
+    return {
+        "id": session.id,
+        "name": session.name,
+        "description": session.description,
+        "status": session.status.value if hasattr(session.status, "value") else session.status,
+        "device_model": session.device_model,
+        "os_version": session.os_version,
+        "xr_runtime": session.xr_runtime,
+        "app_version": session.app_version,
+        "scene_id": session.scene_id,
+        "user_id": session.user_id,
+        "project_id": session.project_id,
+        "config": session.config,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "duration_seconds": session.duration_seconds,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+    }
+
+
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     skip: int = Query(0, ge=0),
@@ -73,6 +96,27 @@ async def get_project(
             detail="项目不存在",
         )
     return project
+
+
+@router.get("/{project_id}/test-sessions")
+async def list_project_test_sessions(
+    project_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="项目不存在",
+        )
+
+    query = db.query(TestSession).filter(TestSession.project_id == project_id)
+    total = query.count()
+    sessions = query.order_by(desc(TestSession.created_at)).offset(skip).limit(limit).all()
+    return {"total": total, "items": [_session_response(session) for session in sessions]}
 
 
 @router.post("", response_model=ProjectResponse)

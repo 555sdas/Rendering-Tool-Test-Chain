@@ -68,6 +68,9 @@ namespace XRDataCollector.Core
         [Tooltip("平台项目 ID")]
         public int projectId = 1;
 
+        [Tooltip("平台项目名称")]
+        public string projectName = "";
+
         /// <summary>
         /// 自动创建会话时使用的场景 ID。
         /// </summary>

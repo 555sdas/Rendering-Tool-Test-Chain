@@ -13,6 +13,7 @@ import {
   Popconfirm,
 } from 'antd';
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { projectsApi, type Project, type ProjectCreate } from '@/api/projects';
 
 const { Option } = Select;
@@ -33,6 +34,7 @@ const typeColors: Record<string, string> = {
 };
 
 const Projects: React.FC = () => {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
@@ -139,7 +141,7 @@ const Projects: React.FC = () => {
       key: 'action',
       render: (_: unknown, record: Project) => (
         <Space size="small">
-          <Button type="text" icon={<EyeOutlined />} size="small">
+          <Button type="text" icon={<EyeOutlined />} size="small" onClick={() => navigate(`/projects/${record.id}`)}>
             查看
           </Button>
           <Button type="text" icon={<EditOutlined />} size="small" onClick={() => handleEdit(record)}>

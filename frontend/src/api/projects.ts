@@ -1,4 +1,5 @@
 import apiClient from './client';
+import type { TestSession } from './sessions';
 
 export interface Project {
   id: number;
@@ -48,6 +49,11 @@ export const projectsApi = {
 
   delete: async (id: number): Promise<{ message: string }> => {
     const response = await apiClient.delete<{ message: string }>(`/projects/${id}`);
+    return response.data;
+  },
+
+  listSessions: async (id: number, params?: { skip?: number; limit?: number }): Promise<{ total: number; items: TestSession[] }> => {
+    const response = await apiClient.get<{ total: number; items: TestSession[] }>(`/projects/${id}/test-sessions`, { params });
     return response.data;
   },
 };

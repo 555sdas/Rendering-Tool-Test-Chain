@@ -26,6 +26,11 @@ namespace XRDataCollector.Data
         /// </summary>
         public TimeSpan elapsedTime;
 
+        /// <summary>
+        /// 采集阶段：frame_rate 表示帧率阶段，metrics 表示其它指标阶段
+        /// </summary>
+        public string collectionPhase;
+
         #endregion
 
         #region Frame Metrics

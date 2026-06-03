@@ -88,6 +88,7 @@ namespace XRDataCollector.Exporters
             sb.AppendLine(
                 "Timestamp," +
                 "ElapsedTime(s)," +
+                "CollectionPhase," +
                 "FrameRate(FPS)," +
                 "FrameTime(ms)," +
                 "RawFrameTime(ms)," +
@@ -124,6 +125,7 @@ namespace XRDataCollector.Exporters
         {
             sb.Append($"{sample.timestamp:O},");
             sb.Append($"{sample.elapsedTime.TotalSeconds:F3},");
+            sb.Append($"{EscapeCsv(sample.collectionPhase ?? "")},");
             sb.Append($"{sample.frameRate:F2},");
             sb.Append($"{sample.frameTimeMs:F3},");
             sb.Append($"{sample.rawFrameTimeMs:F3},");

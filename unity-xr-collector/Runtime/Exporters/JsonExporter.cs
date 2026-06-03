@@ -98,6 +98,7 @@ namespace XRDataCollector.Exporters
             sb.AppendLine("    {");
             sb.AppendLine($"      \"timestamp\": \"{sample.timestamp:O}\",");
             sb.AppendLine($"      \"elapsedTime\": {sample.elapsedTime.TotalSeconds:F3},");
+            sb.AppendLine($"      \"collectionPhase\": \"{EscapeJson(sample.collectionPhase ?? "")}\",");
             sb.AppendLine($"      \"frameRate\": {sample.frameRate:F2},");
             sb.AppendLine($"      \"frameTimeMs\": {sample.frameTimeMs:F3},");
             sb.AppendLine($"      \"rawFrameTimeMs\": {sample.rawFrameTimeMs:F3},");

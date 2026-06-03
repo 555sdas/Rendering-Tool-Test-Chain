@@ -1,10 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using XRDataCollector.Core;
 using XRDataCollector.Data;
 using XRDataCollector.Exporters;
+using XRDataCollector.Network;
 
 namespace XRDataCollector.Editor
 {
@@ -26,8 +31,12 @@ namespace XRDataCollector.Editor
         private string statusMessage = "";
         private MessageType statusType = MessageType.None;
         private float statusClearTime;
+        private readonly List<PlatformProject> platformProjects = new List<PlatformProject>();
+        private int selectedProjectIndex = -1;
+        private bool isProjectSyncing;
 
         private const float StatusDisplayDuration = 5f;
+        private const string PendingStartAfterPlayModeKey = "XRDataCollector.PendingStartAfterPlayMode";
 
         #endregion
 
@@ -54,6 +63,7 @@ namespace XRDataCollector.Editor
         private void OnEnable()
         {
             exportPath = Path.Combine(Application.persistentDataPath, "XRTestData");
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
 
             var manager = GetManager();
             if (manager != null)
@@ -69,11 +79,14 @@ namespace XRDataCollector.Editor
                 manager.OnSessionStopped += OnSessionStopped;
                 manager.OnDataExported += OnDataExported;
                 manager.OnDataUploaded += OnDataUploaded;
+                manager.OnPlatformSessionCreated += OnPlatformSessionCreated;
             }
         }
 
         private void OnDisable()
         {
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+
             var manager = GetManager();
             if (manager != null)
             {
@@ -82,6 +95,7 @@ namespace XRDataCollector.Editor
                 manager.OnSessionStopped -= OnSessionStopped;
                 manager.OnDataExported -= OnDataExported;
                 manager.OnDataUploaded -= OnDataUploaded;
+                manager.OnPlatformSessionCreated -= OnPlatformSessionCreated;
             }
         }
 
@@ -196,6 +210,11 @@ namespace XRDataCollector.Editor
 
             if (manager != null)
             {
+                EditorGUILayout.LabelField($"Phase: {manager.CurrentCollectionPhase}");
+                if (manager.IsCollecting)
+                {
+                    EditorGUILayout.LabelField($"Phase Remaining: {manager.CurrentPhaseRemainingSeconds:F1} s");
+                }
                 EditorGUILayout.LabelField($"Samples Collected: {manager.GetSampleCount()}");
             }
 
@@ -217,6 +236,8 @@ namespace XRDataCollector.Editor
 
                 EditorGUILayout.LabelField("Session Name:", session.SessionName);
                 EditorGUILayout.LabelField("Session ID:", session.SessionId);
+                EditorGUILayout.LabelField("Platform Session ID:", session.PlatformSessionId > 0 ? session.PlatformSessionId.ToString() : "Not synced yet");
+                EditorGUILayout.LabelField("Platform Run Index:", session.PlatformRunIndex > 0 ? session.PlatformRunIndex.ToString() : "-");
                 EditorGUILayout.LabelField("Start Time:", session.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
                 EditorGUILayout.LabelField("Duration:", $"{session.ElapsedTime.TotalSeconds:F2} s");
                 EditorGUILayout.LabelField("Status:", session.IsActive ? "Active" : "Stopped");
@@ -250,6 +271,7 @@ namespace XRDataCollector.Editor
                 if (sample != null)
                 {
                     EditorGUILayout.LabelField("Timestamp:", sample.timestamp.ToLocalTime().ToString("HH:mm:ss.fff"));
+                    EditorGUILayout.LabelField("Phase:", sample.collectionPhase ?? "-");
                     EditorGUILayout.LabelField("Frame Rate:", $"{sample.frameRate:F1} FPS");
                     EditorGUILayout.LabelField("Frame Time:", $"{sample.frameTimeMs:F2} ms");
                     EditorGUILayout.LabelField("CPU Usage:", $"{sample.cpuUsagePercent:F1} %");
@@ -323,6 +345,7 @@ namespace XRDataCollector.Editor
             {
                 EditorGUILayout.LabelField("Platform:", manager.Config.platformBaseUrl);
                 EditorGUILayout.LabelField("Mode:", manager.Config.autoCreateSession ? "Auto create session and upload" : "Upload to configured URL");
+                DrawProjectSyncControls(manager);
             }
             else
             {
@@ -339,6 +362,59 @@ namespace XRDataCollector.Editor
             GUI.enabled = true;
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawProjectSyncControls(XRTestManager manager)
+        {
+            var config = manager.Config;
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Project Sync", EditorStyles.boldLabel);
+
+            EditorGUILayout.BeginHorizontal();
+            GUI.enabled = !isProjectSyncing;
+            if (GUILayout.Button(isProjectSyncing ? "Refreshing..." : "Refresh Projects", GUILayout.Height(24)))
+            {
+                RefreshPlatformProjects();
+            }
+            GUI.enabled = true;
+            EditorGUILayout.EndHorizontal();
+
+            if (platformProjects.Count > 0)
+            {
+                SyncSelectedProjectIndex(config);
+
+                string[] options = new string[platformProjects.Count];
+                for (int i = 0; i < platformProjects.Count; i++)
+                {
+                    options[i] = platformProjects[i].DisplayName;
+                }
+
+                int currentIndex = selectedProjectIndex >= 0 ? selectedProjectIndex : 0;
+                int newIndex = EditorGUILayout.Popup("Project:", currentIndex, options);
+                if (newIndex != selectedProjectIndex)
+                {
+                    SelectPlatformProject(manager, newIndex);
+                }
+            }
+            else
+            {
+                string projectLabel = string.IsNullOrEmpty(config.projectName)
+                    ? $"Project ID {config.projectId}"
+                    : $"{config.projectName} (ID {config.projectId})";
+                EditorGUILayout.LabelField("Selected Project:", projectLabel);
+                EditorGUILayout.HelpBox("Click Refresh Projects after creating a project in the web platform.", MessageType.Info);
+            }
+
+            if (config.projectId <= 0)
+            {
+                EditorGUILayout.HelpBox("Select a platform project before starting synced collection.", MessageType.Warning);
+            }
+
+            if (manager.PlatformSessionId > 0)
+            {
+                EditorGUILayout.LabelField("Platform Session ID:", manager.PlatformSessionId.ToString());
+            }
         }
 
         private void DrawSettings()
@@ -367,6 +443,7 @@ namespace XRDataCollector.Editor
                 config.platformBaseUrl = EditorGUILayout.TextField("Platform API Base URL:", config.platformBaseUrl);
                 config.autoCreateSession = EditorGUILayout.Toggle("Auto Create Session:", config.autoCreateSession);
                 config.projectId = EditorGUILayout.IntField("Project ID:", config.projectId);
+                config.projectName = EditorGUILayout.TextField("Project Name:", config.projectName);
                 config.sceneId = EditorGUILayout.IntField("Scene ID:", config.sceneId);
                 config.uploadUrl = EditorGUILayout.TextField("Fixed Upload URL:", config.uploadUrl);
                 config.authToken = EditorGUILayout.PasswordField("Bearer Token:", config.authToken);
@@ -411,10 +488,27 @@ namespace XRDataCollector.Editor
 
         private void StartCollection()
         {
+            if (!EditorApplication.isPlaying)
+            {
+                SessionState.SetBool(PendingStartAfterPlayModeKey, true);
+                EditorApplication.isPlaying = true;
+                ShowStatus("Entering Play Mode. Collection will start automatically.", MessageType.Info);
+                return;
+            }
+
             var manager = GetManager();
             if (manager == null)
             {
                 ShowStatus("XRTestManager not found. Please add it to a GameObject in the scene.", MessageType.Error);
+                return;
+            }
+
+            if (manager.Config != null &&
+                manager.Config.enableNetworkUpload &&
+                manager.Config.autoCreateSession &&
+                manager.Config.projectId <= 0)
+            {
+                ShowStatus("Select a platform project before starting synced collection.", MessageType.Error);
                 return;
             }
 
@@ -495,6 +589,61 @@ namespace XRDataCollector.Editor
             ShowStatus("Syncing data to platform...", MessageType.Info);
         }
 
+        private void RefreshPlatformProjects()
+        {
+            var manager = GetManager();
+            if (manager == null || manager.Config == null)
+            {
+                ShowStatus("XRTestManager not found.", MessageType.Error);
+                return;
+            }
+
+            if (isProjectSyncing)
+            {
+                return;
+            }
+
+            isProjectSyncing = true;
+            ShowStatus("Refreshing platform projects...", MessageType.Info);
+
+            if (!EditorApplication.isPlaying)
+            {
+                try
+                {
+                    var projects = LoadProjectsInEditor(manager.Config);
+                    ApplyLoadedProjects(manager, projects);
+                    ShowStatus($"Loaded {platformProjects.Count} platform projects.", MessageType.Info);
+                }
+                catch (Exception e)
+                {
+                    ShowStatus($"Refresh projects failed: {e.Message}", MessageType.Error);
+                }
+                finally
+                {
+                    isProjectSyncing = false;
+                    Repaint();
+                }
+                return;
+            }
+
+            var uploader = new TestDataUploader();
+            uploader.LoadProjectsAsync(manager.Config, (projects, error) =>
+            {
+                isProjectSyncing = false;
+
+                if (!string.IsNullOrEmpty(error))
+                {
+                    ShowStatus(error, MessageType.Error);
+                    Repaint();
+                    return;
+                }
+
+                ApplyLoadedProjects(manager, projects);
+                ShowStatus($"Loaded {platformProjects.Count} platform projects.", MessageType.Info);
+                Repaint();
+            });
+        }
+
         #endregion
 
         #region Event Handlers
@@ -535,6 +684,40 @@ namespace XRDataCollector.Editor
             Repaint();
         }
 
+        private void OnPlatformSessionCreated(int sessionId)
+        {
+            ShowStatus($"Platform session {sessionId} created.", MessageType.Info);
+            Repaint();
+        }
+
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state != PlayModeStateChange.EnteredPlayMode)
+            {
+                return;
+            }
+
+            if (!SessionState.GetBool(PendingStartAfterPlayModeKey, false))
+            {
+                return;
+            }
+
+            SessionState.SetBool(PendingStartAfterPlayModeKey, false);
+            EditorApplication.delayCall += StartPendingCollection;
+        }
+
+        private void StartPendingCollection()
+        {
+            var manager = GetManager();
+            if (manager == null)
+            {
+                ShowStatus("XRTestManager not found after entering Play Mode.", MessageType.Error);
+                return;
+            }
+
+            manager.StartCollection();
+        }
+
         #endregion
 
         #region Helpers
@@ -544,6 +727,154 @@ namespace XRDataCollector.Editor
             statusMessage = message;
             statusType = type;
             statusClearTime = Time.realtimeSinceStartup + StatusDisplayDuration;
+        }
+
+        private void SyncSelectedProjectIndex(XRTestConfig config)
+        {
+            selectedProjectIndex = -1;
+            if (config == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < platformProjects.Count; i++)
+            {
+                if (platformProjects[i].id == config.projectId)
+                {
+                    selectedProjectIndex = i;
+                    return;
+                }
+            }
+        }
+
+        private void ApplyLoadedProjects(XRTestManager manager, List<PlatformProject> projects)
+        {
+            platformProjects.Clear();
+            if (projects != null)
+            {
+                platformProjects.AddRange(projects);
+            }
+
+            SyncSelectedProjectIndex(manager.Config);
+            if (selectedProjectIndex < 0 && platformProjects.Count > 0)
+            {
+                SelectPlatformProject(manager, 0);
+            }
+
+            EditorUtility.SetDirty(manager);
+        }
+
+        private List<PlatformProject> LoadProjectsInEditor(XRTestConfig config)
+        {
+            string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
+            if (string.IsNullOrEmpty(baseUrl))
+            {
+                throw new InvalidOperationException("Platform base URL is empty.");
+            }
+
+            string token = config.authToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                token = LoginInEditor(baseUrl, config.username, config.password);
+                config.authToken = token;
+            }
+
+            if (string.IsNullOrEmpty(token))
+            {
+                throw new InvalidOperationException("Login failed. Check username, password, or token.");
+            }
+
+            string json = SendEditorRequest(
+                "GET",
+                $"{baseUrl}/data-collection/platform/projects?limit=100",
+                null,
+                null,
+                token);
+            return ParseProjectList(json);
+        }
+
+        private string LoginInEditor(string baseUrl, string username, string password)
+        {
+            string body =
+                "username=" + Uri.EscapeDataString(username ?? "") +
+                "&password=" + Uri.EscapeDataString(password ?? "");
+            string json = SendEditorRequest(
+                "POST",
+                $"{baseUrl}/auth/login",
+                "application/x-www-form-urlencoded",
+                body,
+                null);
+            return ExtractStringField(json, "access_token");
+        }
+
+        private string SendEditorRequest(string method, string url, string contentType, string body, string token)
+        {
+            var request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = method;
+            request.Timeout = 30000;
+
+            if (!string.IsNullOrEmpty(token))
+            {
+                request.Headers["Authorization"] = "Bearer " + token;
+            }
+
+            if (!string.IsNullOrEmpty(body))
+            {
+                byte[] raw = Encoding.UTF8.GetBytes(body);
+                request.ContentType = contentType ?? "application/json";
+                request.ContentLength = raw.Length;
+                using (var stream = request.GetRequestStream())
+                {
+                    stream.Write(raw, 0, raw.Length);
+                }
+            }
+
+            using (var response = (HttpWebResponse)request.GetResponse())
+            using (var reader = new StreamReader(response.GetResponseStream()))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
+        private List<PlatformProject> ParseProjectList(string json)
+        {
+            var response = JsonUtility.FromJson<PlatformProjectListResponse>(json);
+            return response != null && response.items != null
+                ? response.items
+                : new List<PlatformProject>();
+        }
+
+        private string NormalizeBaseUrl(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "";
+            }
+            return value.Trim().TrimEnd('/');
+        }
+
+        private string ExtractStringField(string json, string field)
+        {
+            var match = Regex.Match(json, $"\"{field}\"\\s*:\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private void SelectPlatformProject(XRTestManager manager, int index)
+        {
+            if (manager == null || manager.Config == null || index < 0 || index >= platformProjects.Count)
+            {
+                return;
+            }
+
+            var project = platformProjects[index];
+            selectedProjectIndex = index;
+            manager.Config.projectId = project.id;
+            manager.Config.projectName = project.name;
+            manager.Config.sessionName = string.IsNullOrEmpty(project.name) ? "Unity Test" : project.name + " Unity Test";
+
+            EditorUtility.SetDirty(manager);
+            ShowStatus($"Selected project {project.name} (next session #{project.next_session_index}).", MessageType.Info);
+            Repaint();
         }
 
         #endregion

@@ -47,9 +47,23 @@ namespace XRDataCollector.Core
         /// </summary>
         public event Action<bool> OnDataUploaded;
 
+        public event Action<int> OnPlatformSessionCreated;
+
         #endregion
 
         #region Fields
+
+        private enum CollectionPhase
+        {
+            None,
+            FrameRate,
+            Metrics
+        }
+
+        private const float FrameRatePhaseDurationSeconds = 30f;
+        private const float MetricsPhaseDurationSeconds = 30f;
+        private const string FrameRatePhaseName = "frame_rate";
+        private const string MetricsPhaseName = "metrics";
 
         [SerializeField]
         private XRTestConfig config;
@@ -60,6 +74,8 @@ namespace XRDataCollector.Core
         private List<PerformanceSample> samples;
         private float collectTimer;
         private bool isCollecting;
+        private bool isPlatformSessionCreating;
+        private bool pendingUploadAfterPlatformSession;
 
         private FrameRateCollector frameRateCollector;
         private FrameTimeCollector frameTimeCollector;
@@ -67,6 +83,8 @@ namespace XRDataCollector.Core
         private float cachedFrameTimeMs;
         private int lastBatchFrameCount;
         private float lastBatchRealTime;
+        private float collectionStartRealTime;
+        private CollectionPhase currentPhase;
 
         #endregion
 
@@ -93,6 +111,51 @@ namespace XRDataCollector.Core
         /// 当前会话信息
         /// </summary>
         public XRTestSession Session => session;
+
+        public int PlatformSessionId => session != null ? session.PlatformSessionId : 0;
+
+        /// <summary>
+        /// 当前采集阶段
+        /// </summary>
+        public string CurrentCollectionPhase
+        {
+            get
+            {
+                switch (currentPhase)
+                {
+                    case CollectionPhase.FrameRate:
+                        return "Frame Rate (0-30s)";
+                    case CollectionPhase.Metrics:
+                        return "Metrics (30-60s)";
+                    default:
+                        return "Idle";
+                }
+            }
+        }
+
+        /// <summary>
+        /// 当前阶段剩余秒数
+        /// </summary>
+        public float CurrentPhaseRemainingSeconds
+        {
+            get
+            {
+                if (!isCollecting) return 0f;
+
+                float elapsed = Time.unscaledTime - collectionStartRealTime;
+                if (currentPhase == CollectionPhase.FrameRate)
+                {
+                    return Mathf.Max(0f, FrameRatePhaseDurationSeconds - elapsed);
+                }
+
+                if (currentPhase == CollectionPhase.Metrics)
+                {
+                    return Mathf.Max(0f, FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds - elapsed);
+                }
+
+                return 0f;
+            }
+        }
 
         #endregion
 
@@ -128,7 +191,18 @@ namespace XRDataCollector.Core
         {
             if (!isCollecting) return;
 
-            collectTimer += Time.unscaledDeltaTime;
+            float collectionElapsed = Time.unscaledTime - collectionStartRealTime;
+            if (currentPhase == CollectionPhase.FrameRate && collectionElapsed >= FrameRatePhaseDurationSeconds)
+            {
+                SwitchToMetricsPhase();
+            }
+
+            if (currentPhase == CollectionPhase.Metrics &&
+                collectionElapsed >= FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds)
+            {
+                StopCollection();
+                return;
+            }
 
             int currentFrameCount = Time.frameCount;
             float currentTime = Time.unscaledTime;
@@ -146,11 +220,20 @@ namespace XRDataCollector.Core
 
             cachedFrameTimeMs = Time.unscaledDeltaTime * 1000f;
 
+            collectTimer += Time.unscaledDeltaTime;
+
             if (collectTimer >= config.collectInterval)
             {
                 collectTimer = 0f;
 
-                CollectSample();
+                if (currentPhase == CollectionPhase.FrameRate)
+                {
+                    CollectFrameRateSample();
+                }
+                else if (currentPhase == CollectionPhase.Metrics)
+                {
+                    CollectMetricsSample();
+                }
 
                 lastBatchFrameCount = Time.frameCount;
                 lastBatchRealTime = Time.unscaledTime;
@@ -203,19 +286,19 @@ namespace XRDataCollector.Core
             samples.Clear();
             collectTimer = 0f;
             isCollecting = true;
-
-            foreach (var collector in allCollectors)
-            {
-                collector.StartCollecting();
-            }
+            isPlatformSessionCreating = false;
+            pendingUploadAfterPlatformSession = false;
 
             cachedFrameRate = 0f;
             cachedFrameTimeMs = 0f;
             lastBatchFrameCount = Time.frameCount;
             lastBatchRealTime = Time.unscaledTime;
+            collectionStartRealTime = Time.unscaledTime;
+            StartFrameRatePhase();
 
             OnSessionStarted?.Invoke();
-            Debug.Log($"[XRTestManager] Session '{config.sessionName}' started.");
+            CreatePlatformSessionForCurrentRun();
+            Debug.Log($"[XRTestManager] Session '{config.sessionName}' started. Phase 1: frame rate for 30s.");
         }
 
         /// <summary>
@@ -233,8 +316,15 @@ namespace XRDataCollector.Core
                 collector.StopCollecting();
             }
 
+            currentPhase = CollectionPhase.None;
+
             OnSessionStopped?.Invoke();
             Debug.Log($"[XRTestManager] Session '{config.sessionName}' stopped. Samples collected: {samples.Count}");
+
+            if (config.enableNetworkUpload && samples.Count > 0)
+            {
+                UploadData("", null);
+            }
         }
 
         /// <summary>
@@ -278,6 +368,18 @@ namespace XRDataCollector.Core
             {
                 Debug.LogWarning("[XRTestManager] No samples to upload.");
                 OnDataUploaded?.Invoke(false);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(url) &&
+                config != null &&
+                config.autoCreateSession &&
+                session != null &&
+                session.PlatformSessionId <= 0 &&
+                isPlatformSessionCreating)
+            {
+                pendingUploadAfterPlatformSession = true;
+                Debug.Log("[XRTestManager] Platform session is still being created. Upload will continue after it is ready.");
                 return;
             }
 
@@ -338,6 +440,46 @@ namespace XRDataCollector.Core
         #endregion
 
         #region Private Methods
+
+        private void CreatePlatformSessionForCurrentRun()
+        {
+            EnsureRuntimeState();
+            if (!config.enableNetworkUpload || !config.autoCreateSession || config.projectId <= 0 || session == null)
+            {
+                return;
+            }
+
+            var targetSession = session;
+            isPlatformSessionCreating = true;
+
+            var uploader = new TestDataUploader();
+            uploader.CreatePlatformSessionAsync(config, targetSession, (sessionId, runIndex, platformName, error) =>
+            {
+                isPlatformSessionCreating = false;
+
+                if (targetSession != session)
+                {
+                    return;
+                }
+
+                if (sessionId > 0)
+                {
+                    targetSession.BindPlatformSession(sessionId, runIndex, platformName);
+                    OnPlatformSessionCreated?.Invoke(sessionId);
+                    Debug.Log($"[XRTestManager] Platform session created: {sessionId}, run #{runIndex}.");
+                }
+                else if (!string.IsNullOrEmpty(error))
+                {
+                    Debug.LogError($"[XRTestManager] Platform session create failed: {error}");
+                }
+
+                if (pendingUploadAfterPlatformSession && samples.Count > 0)
+                {
+                    pendingUploadAfterPlatformSession = false;
+                    UploadData("", null);
+                }
+            });
+        }
 
         private void InitializeCollectors()
         {
@@ -402,17 +544,56 @@ namespace XRDataCollector.Core
             }
         }
 
-        private void CollectSample()
+        private void StartFrameRatePhase()
         {
-            var sample = new PerformanceSample
+            currentPhase = CollectionPhase.FrameRate;
+            frameRateCollector?.StartCollecting();
+            frameTimeCollector?.StartCollecting();
+        }
+
+        private void SwitchToMetricsPhase()
+        {
+            frameRateCollector?.StopCollecting();
+            frameTimeCollector?.StopCollecting();
+
+            foreach (var collector in batchCollectors)
+            {
+                collector.StartCollecting();
+            }
+
+            currentPhase = CollectionPhase.Metrics;
+            collectTimer = 0f;
+            lastBatchFrameCount = Time.frameCount;
+            lastBatchRealTime = Time.unscaledTime;
+
+            Debug.Log("[XRTestManager] Phase 2 started: collecting non-frame-rate metrics for 30s.");
+        }
+
+        private PerformanceSample CreateBaseSample(string phase)
+        {
+            return new PerformanceSample
             {
                 timestamp = DateTime.UtcNow,
                 sessionId = session?.SessionId ?? "unknown",
                 elapsedTime = session?.ElapsedTime ?? TimeSpan.Zero,
-                frameRate = cachedFrameRate,
-                frameTimeMs = cachedFrameTimeMs,
-                rawFrameTimeMs = cachedFrameTimeMs
+                collectionPhase = phase
             };
+        }
+
+        private void CollectFrameRateSample()
+        {
+            var sample = CreateBaseSample(FrameRatePhaseName);
+            sample.frameRate = cachedFrameRate;
+            sample.frameTimeMs = cachedFrameTimeMs;
+            sample.rawFrameTimeMs = cachedFrameTimeMs;
+
+            samples.Add(sample);
+            OnSampleCollected?.Invoke(sample);
+        }
+
+        private void CollectMetricsSample()
+        {
+            var sample = CreateBaseSample(MetricsPhaseName);
 
             foreach (var collector in batchCollectors)
             {
