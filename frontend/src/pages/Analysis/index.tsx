@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress } from 'antd';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space } from 'antd';
+import { useSearchParams } from 'react-router-dom';
 import {
   LineChart,
   Line,
@@ -80,7 +81,12 @@ const fallbackSessionOptions = [
 ];
 
 const Analysis: React.FC = () => {
-  const [selectedSessions, setSelectedSessions] = useState<string[]>(['session1', 'session2']);
+  const [searchParams] = useSearchParams();
+  const sessionIdParam = searchParams.get('sessionId');
+  const projectIdParam = searchParams.get('projectId');
+  const projectId = projectIdParam ? Number(projectIdParam) : undefined;
+  const projectFilterId = projectId && Number.isFinite(projectId) ? projectId : undefined;
+  const [selectedSessions, setSelectedSessions] = useState<string[]>(sessionIdParam ? [sessionIdParam] : ['session1', 'session2']);
   const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
   const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
@@ -88,21 +94,25 @@ const Analysis: React.FC = () => {
   useEffect(() => {
     const loadSessions = async () => {
       try {
-        const response = await sessionsApi.list({ limit: 50 });
+        const response = await sessionsApi.list({ limit: 50, project_id: projectFilterId });
         if (response.items.length > 0) {
           const options = response.items.map((session) => ({
             value: String(session.id),
             label: session.name,
           }));
           setSessionOptions(options);
-          setSelectedSessions([options[0].value]);
+          const preferredSessionId =
+            sessionIdParam && options.some((option) => option.value === sessionIdParam)
+              ? sessionIdParam
+              : options[0].value;
+          setSelectedSessions([preferredSessionId]);
         }
       } catch {
         message.warning('未能读取后端会话，当前显示内置分析样例');
       }
     };
     loadSessions();
-  }, []);
+  }, [projectFilterId, sessionIdParam]);
 
   useEffect(() => {
     const sessionId = Number(selectedSessions[0]);
@@ -226,7 +236,10 @@ const Analysis: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h2 style={{ margin: 0 }}>性能分析</h2>
+        <Space>
+          <h2 style={{ margin: 0 }}>性能分析</h2>
+          {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
+        </Space>
         <Select
           mode="multiple"
           placeholder="选择对比会话"

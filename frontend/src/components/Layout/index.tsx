@@ -5,8 +5,6 @@ import {
   MenuUnfoldOutlined,
   DashboardOutlined,
   ProjectOutlined,
-  PlayCircleOutlined,
-  BarChartOutlined,
   SettingOutlined,
   LogoutOutlined,
   UserOutlined,
@@ -34,16 +32,6 @@ const MainLayout: React.FC = () => {
       key: '/projects',
       icon: <ProjectOutlined />,
       label: '项目管理',
-    },
-    {
-      key: '/sessions',
-      icon: <PlayCircleOutlined />,
-      label: '测试会话',
-    },
-    {
-      key: '/analysis',
-      icon: <BarChartOutlined />,
-      label: '性能分析',
     },
     {
       key: '/settings',
@@ -81,7 +69,13 @@ const MainLayout: React.FC = () => {
     }
   };
 
-  const selectedKeys = [location.pathname];
+  const selectedKeys = [
+    location.pathname.startsWith('/projects') ||
+    location.pathname.startsWith('/analysis') ||
+    location.pathname.startsWith('/sessions')
+      ? '/projects'
+      : location.pathname,
+  ];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

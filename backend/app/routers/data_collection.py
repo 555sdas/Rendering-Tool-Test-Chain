@@ -1,11 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models.user import User
+from app.models.project import Project
 from app.models.test_session import TestSession, TestSessionStatus
 from app.models.test_task import TestTask, TestTaskStatus
 from app.models.performance_sample import PerformanceSample
@@ -66,6 +67,18 @@ class PerformanceSampleBatchCreate(BaseModel):
     sampleCount: Optional[int] = None
 
 
+class PlatformSessionAutoCreate(BaseModel):
+    project_id: int = Field(..., gt=0)
+    scene_id: Optional[int] = None
+    session_name_prefix: Optional[str] = Field(None, max_length=160)
+    description: Optional[str] = None
+    device_model: Optional[str] = None
+    os_version: Optional[str] = None
+    xr_runtime: Optional[str] = None
+    app_version: Optional[str] = None
+    config: Optional[dict] = None
+
+
 class TestTaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
@@ -92,12 +105,30 @@ def _first_value(*values):
     return None
 
 
-def _parse_timestamp(value) -> datetime:
+def _try_parse_timestamp(value) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value.replace(tzinfo=None)
     if isinstance(value, str) and value:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    return None
+
+
+def _parse_timestamp(value) -> datetime:
+    parsed = _try_parse_timestamp(value)
+    if parsed:
+        return parsed
     return datetime.utcnow()
+
+
+def _parse_float(value) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _device_info_from_sample(item: dict) -> dict:
@@ -135,6 +166,120 @@ def _session_response(session: TestSession) -> dict:
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
     }
+
+
+def _platform_project_response(project: Project, db: Session) -> dict:
+    session_count = (
+        db.query(func.count(TestSession.id))
+        .filter(TestSession.project_id == project.id)
+        .scalar()
+        or 0
+    )
+    return {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "project_type": project.project_type,
+        "status": project.status,
+        "session_count": session_count,
+        "next_session_index": session_count + 1,
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+    }
+
+
+@router.get("/platform/projects")
+async def list_platform_projects(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    status_filter: Optional[str] = Query("active", alias="status"),
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Project)
+    if status_filter:
+        query = query.filter(Project.status == status_filter)
+
+    total = query.count()
+    projects = query.order_by(desc(Project.created_at)).offset(skip).limit(limit).all()
+    return {
+        "total": total,
+        "items": [_platform_project_response(project, db) for project in projects],
+    }
+
+
+@router.post("/platform/test-sessions/auto-start")
+async def auto_start_platform_test_session(
+    request: Request,
+    session_data: PlatformSessionAutoCreate,
+    current_user: User = Depends(require_permission(Permission.TEST_EXECUTE)),
+    db: Session = Depends(get_db),
+):
+    project = db.query(Project).filter(Project.id == session_data.project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    session_count = (
+        db.query(func.count(TestSession.id))
+        .filter(TestSession.project_id == project.id)
+        .scalar()
+        or 0
+    )
+    run_index = session_count + 1
+    session_name = f"#{run_index}"
+
+    config = dict(session_data.config or {})
+    config.update(
+        {
+            "source": "unity_plugin",
+            "platform_project_id": project.id,
+            "platform_project_name": project.name,
+            "run_index": run_index,
+            "session_sequence": run_index,
+        }
+    )
+
+    service = DataCollectionService(db)
+    session = service.create_test_session(
+        name=session_name,
+        description=session_data.description or "Unity plugin auto-created session",
+        device_model=session_data.device_model,
+        os_version=session_data.os_version,
+        xr_runtime=session_data.xr_runtime,
+        app_version=session_data.app_version,
+        scene_id=session_data.scene_id,
+        user_id=current_user.id,
+        project_id=project.id,
+        config=config,
+    )
+    session.status = TestSessionStatus.RUNNING.value
+    session.started_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+
+    await log_audit(
+        db=db,
+        action="test_execute",
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else None,
+        resource_type="test_session",
+        resource_id=str(session.id),
+        details={"action": "unity_auto_start", "project_id": project.id, "run_index": run_index},
+    )
+
+    response = _session_response(session)
+    response.update(
+        {
+            "run_index": run_index,
+            "project_name": project.name,
+            "upload_url": f"/data-collection/test-sessions/{session.id}/samples/batch",
+        }
+    )
+    return response
 
 
 @router.get("/test-sessions")
@@ -318,6 +463,7 @@ async def add_performance_samples_batch(
 
     objects = []
     timestamps: list[datetime] = []
+    elapsed_seconds: list[float] = []
     first_device_info: dict = {}
     first_sample: dict = payload.samples[0] if payload.samples else {}
     for item in payload.samples:
@@ -337,6 +483,13 @@ async def add_performance_samples_batch(
 
         timestamp = _parse_timestamp(item.get("timestamp"))
         timestamps.append(timestamp)
+        elapsed_time = _parse_float(
+            item.get("elapsedTime")
+            or item.get("elapsed_time")
+            or item.get("elapsed_seconds")
+        )
+        if elapsed_time is not None:
+            elapsed_seconds.append(max(0.0, elapsed_time))
 
         objects.append(
             PerformanceSample(
@@ -367,24 +520,54 @@ async def add_performance_samples_batch(
         )
 
     db.bulk_save_objects(objects)
+    upload_session = payload.session or {}
+    if not isinstance(upload_session, dict):
+        upload_session = {}
+
     if timestamps:
         first_ts = min(timestamps)
         last_ts = max(timestamps)
-        session.started_at = session.started_at or first_ts
-        session.ended_at = last_ts
-        session.duration_seconds = max(0.0, (last_ts - session.started_at).total_seconds())
+        timestamp_duration = max(0.0, (last_ts - first_ts).total_seconds())
+        session_duration = _parse_float(
+            upload_session.get("duration")
+            or upload_session.get("durationSeconds")
+            or upload_session.get("duration_seconds")
+        )
+        elapsed_duration = max(elapsed_seconds) if elapsed_seconds else None
+        duration_candidates = [
+            value for value in [timestamp_duration, session_duration, elapsed_duration]
+            if value is not None
+        ]
+        render_duration = max(duration_candidates) if duration_candidates else timestamp_duration
+        session_start = _try_parse_timestamp(upload_session.get("startTime") or upload_session.get("start_time"))
+        start_ts = session_start or session.started_at or first_ts
+        end_ts = last_ts
+        if render_duration is not None:
+            duration_end_ts = start_ts + timedelta(seconds=render_duration)
+            if duration_end_ts > end_ts:
+                end_ts = duration_end_ts
+
+        session.started_at = start_ts
+        session.ended_at = end_ts
+        session.duration_seconds = max(0.0, render_duration or (end_ts - start_ts).total_seconds())
         session.status = TestSessionStatus.COMPLETED.value
 
-    upload_session = payload.session or {}
-    if isinstance(upload_session, dict):
-        session.app_version = _first_value(
-            session.app_version,
-            upload_session.get("appVersion"),
-            upload_session.get("productName"),
+        _merge_session_config(
+            session,
+            {
+                "render_duration_seconds": round(session.duration_seconds, 3),
+                "sample_time_span_seconds": round(timestamp_duration, 3),
+                "session_duration_seconds": round(session_duration, 3) if session_duration is not None else None,
+                "max_sample_elapsed_seconds": round(elapsed_duration, 3) if elapsed_duration is not None else None,
+            },
         )
-        unity_version = upload_session.get("unityVersion")
-    else:
-        unity_version = None
+
+    session.app_version = _first_value(
+        session.app_version,
+        upload_session.get("appVersion"),
+        upload_session.get("productName"),
+    )
+    unity_version = upload_session.get("unityVersion")
 
     device_info = first_device_info
     if device_info:

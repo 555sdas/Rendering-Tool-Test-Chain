@@ -17,6 +17,8 @@ namespace XRDataCollector.Core
         private DateTime startTime;
         private DateTime? endTime;
         private bool isActive;
+        private int platformSessionId;
+        private int platformRunIndex;
 
         #endregion
 
@@ -31,6 +33,10 @@ namespace XRDataCollector.Core
         /// 会话名称
         /// </summary>
         public string SessionName => sessionName;
+
+        public int PlatformSessionId => platformSessionId;
+
+        public int PlatformRunIndex => platformRunIndex;
 
         /// <summary>
         /// 会话开始时间（UTC）
@@ -129,6 +135,19 @@ namespace XRDataCollector.Core
             Debug.Log($"[XRTestSession] Session '{sessionName}' stopped at {endTime:O}. Duration: {ElapsedTime.TotalSeconds:F2}s");
         }
 
+        public void BindPlatformSession(int sessionId, int runIndex, string platformSessionName)
+        {
+            platformSessionId = sessionId;
+            platformRunIndex = runIndex;
+
+            if (!string.IsNullOrEmpty(platformSessionName))
+            {
+                sessionName = platformSessionName;
+            }
+
+            Debug.Log($"[XRTestSession] Bound local session to platform session {platformSessionId}, run #{platformRunIndex}.");
+        }
+
         /// <summary>
         /// 获取会话的摘要信息
         /// </summary>
@@ -140,6 +159,7 @@ namespace XRDataCollector.Core
 
             return $"Session: {sessionName}\n" +
                    $"ID: {sessionId}\n" +
+                   $"Platform Session ID: {(platformSessionId > 0 ? platformSessionId.ToString() : "N/A")}\n" +
                    $"Status: {status}\n" +
                    $"Start: {startTime:O}\n" +
                    $"End: {endTime?.ToString("O") ?? "N/A"}\n" +

@@ -86,6 +86,48 @@ namespace XRDataCollector.Network
             host.StartCoroutine(AutoSyncCoroutine(samples, session, config, callback));
         }
 
+        public void LoadProjectsAsync(XRTestConfig config, Action<List<PlatformProject>, string> callback)
+        {
+            if (config == null)
+            {
+                callback?.Invoke(null, "XRTestConfig is null.");
+                return;
+            }
+
+            var host = GetCoroutineHost();
+            if (host == null)
+            {
+                callback?.Invoke(null, "Cannot find a MonoBehaviour to run coroutine.");
+                return;
+            }
+
+            host.StartCoroutine(LoadProjectsCoroutine(config, callback));
+        }
+
+        public void CreatePlatformSessionAsync(XRTestConfig config, XRTestSession session, Action<int, int, string, string> callback)
+        {
+            if (config == null)
+            {
+                callback?.Invoke(0, 0, null, "XRTestConfig is null.");
+                return;
+            }
+
+            if (session == null)
+            {
+                callback?.Invoke(0, 0, null, "XRTestSession is null.");
+                return;
+            }
+
+            var host = GetCoroutineHost();
+            if (host == null)
+            {
+                callback?.Invoke(0, 0, null, "Cannot find a MonoBehaviour to run coroutine.");
+                return;
+            }
+
+            host.StartCoroutine(CreatePlatformSessionFlowCoroutine(config, session, callback));
+        }
+
         #endregion
 
         #region Private Methods
@@ -143,6 +185,70 @@ namespace XRDataCollector.Network
             }
         }
 
+        private IEnumerator LoadProjectsCoroutine(XRTestConfig config, Action<List<PlatformProject>, string> callback)
+        {
+            string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
+            if (string.IsNullOrEmpty(baseUrl))
+            {
+                callback?.Invoke(null, "Platform base URL is empty.");
+                yield break;
+            }
+
+            string token = null;
+            yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
+            if (string.IsNullOrEmpty(token))
+            {
+                callback?.Invoke(null, "Login failed. Check username, password, or token.");
+                yield break;
+            }
+
+            using (var request = UnityWebRequest.Get($"{baseUrl}/data-collection/platform/projects?limit=100"))
+            {
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Authorization", "Bearer " + token);
+                request.timeout = 30;
+
+                yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+                bool success = request.result == UnityWebRequest.Result.Success;
+#else
+                bool success = !request.isNetworkError && !request.isHttpError;
+#endif
+                if (!success)
+                {
+                    callback?.Invoke(null, $"Load projects failed: {request.error} {request.downloadHandler.text}");
+                    yield break;
+                }
+
+                var projects = ParseProjectList(request.downloadHandler.text);
+                callback?.Invoke(projects, null);
+            }
+        }
+
+        private IEnumerator CreatePlatformSessionFlowCoroutine(
+            XRTestConfig config,
+            XRTestSession session,
+            Action<int, int, string, string> callback)
+        {
+            string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
+            if (string.IsNullOrEmpty(baseUrl))
+            {
+                callback?.Invoke(0, 0, null, "Platform base URL is empty.");
+                yield break;
+            }
+
+            string token = null;
+            yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
+            if (string.IsNullOrEmpty(token))
+            {
+                callback?.Invoke(0, 0, null, "Login failed. Check username, password, or token.");
+                yield break;
+            }
+
+            yield return CreatePlatformSessionCoroutine(baseUrl, token, config, session, callback);
+        }
+
         private IEnumerator AutoSyncCoroutine(List<PerformanceSample> samples, XRTestSession session, XRTestConfig config, Action<bool> callback)
         {
             string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
@@ -153,12 +259,8 @@ namespace XRDataCollector.Network
                 yield break;
             }
 
-            string token = config.authToken;
-            if (string.IsNullOrEmpty(token))
-            {
-                yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
-            }
-
+            string token = null;
+            yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
             if (string.IsNullOrEmpty(token))
             {
                 Debug.LogError("[TestDataUploader] Cannot upload without token.");
@@ -167,16 +269,50 @@ namespace XRDataCollector.Network
             }
 
             string uploadUrl = config.uploadUrl;
-            if (string.IsNullOrEmpty(uploadUrl) || config.autoCreateSession)
+            if (config.autoCreateSession)
             {
-                int sessionId = 0;
-                yield return CreateSessionCoroutine(baseUrl, token, config, session, samples[0], value => sessionId = value);
+                int sessionId = session != null ? session.PlatformSessionId : 0;
+                if (sessionId <= 0)
+                {
+                    int runIndex = 0;
+                    string platformName = null;
+                    string error = null;
+                    yield return CreatePlatformSessionCoroutine(
+                        baseUrl,
+                        token,
+                        config,
+                        session,
+                        (id, index, name, message) =>
+                        {
+                            sessionId = id;
+                            runIndex = index;
+                            platformName = name;
+                            error = message;
+                        });
+
+                    if (sessionId > 0 && session != null)
+                    {
+                        session.BindPlatformSession(sessionId, runIndex, platformName);
+                    }
+
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        Debug.LogError($"[TestDataUploader] Create platform session failed: {error}");
+                    }
+                }
+
                 if (sessionId <= 0)
                 {
                     callback?.Invoke(false);
                     yield break;
                 }
                 uploadUrl = $"{baseUrl}/data-collection/test-sessions/{sessionId}/samples/batch";
+            }
+            else if (string.IsNullOrEmpty(uploadUrl))
+            {
+                Debug.LogError("[TestDataUploader] Upload URL is empty and Auto Create Session is disabled.");
+                callback?.Invoke(false);
+                yield break;
             }
 
             string jsonPayload = BuildJsonPayload(samples, session);
@@ -214,18 +350,32 @@ namespace XRDataCollector.Network
             }
         }
 
-        private IEnumerator CreateSessionCoroutine(
+        private IEnumerator EnsureAuthTokenCoroutine(XRTestConfig config, string baseUrl, Action<string> callback)
+        {
+            string token = config.authToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
+                if (!string.IsNullOrEmpty(token))
+                {
+                    config.authToken = token;
+                }
+            }
+
+            callback?.Invoke(token);
+        }
+
+        private IEnumerator CreatePlatformSessionCoroutine(
             string baseUrl,
             string token,
             XRTestConfig config,
             XRTestSession session,
-            PerformanceSample firstSample,
-            Action<int> callback)
+            Action<int, int, string, string> callback)
         {
-            string body = BuildCreateSessionJson(config, session, firstSample);
+            string body = BuildCreateSessionJson(config, session);
             byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
 
-            using (var request = new UnityWebRequest($"{baseUrl}/data-collection/test-sessions", "POST"))
+            using (var request = new UnityWebRequest($"{baseUrl}/data-collection/platform/test-sessions/auto-start", "POST"))
             {
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 request.downloadHandler = new DownloadHandlerBuffer();
@@ -242,12 +392,14 @@ namespace XRDataCollector.Network
 #endif
                 if (!success)
                 {
-                    Debug.LogError($"[TestDataUploader] Create session failed: {request.error} {request.downloadHandler.text}");
-                    callback?.Invoke(0);
+                    callback?.Invoke(0, 0, null, $"{request.error} {request.downloadHandler.text}");
                     yield break;
                 }
 
-                callback?.Invoke(ExtractIntField(request.downloadHandler.text, "id"));
+                int sessionId = ExtractIntField(request.downloadHandler.text, "id");
+                int runIndex = ExtractIntField(request.downloadHandler.text, "run_index");
+                string name = ExtractStringField(request.downloadHandler.text, "name");
+                callback?.Invoke(sessionId, runIndex, name, null);
             }
         }
 
@@ -349,39 +501,70 @@ namespace XRDataCollector.Network
             sb.AppendLine("      },");
         }
 
-        private string BuildCreateSessionJson(XRTestConfig config, XRTestSession session, PerformanceSample sample)
+        private string BuildCreateSessionJson(XRTestConfig config, XRTestSession session)
         {
-            var info = sample.deviceInfo;
-            string name = string.IsNullOrEmpty(config.sessionName)
-                ? $"Unity采集-{DateTime.Now:yyyyMMdd-HHmmss}"
+            string prefix = string.IsNullOrEmpty(config.sessionName)
+                ? (string.IsNullOrEmpty(config.projectName) ? "Unity Test" : config.projectName + " Unity Test")
                 : config.sessionName;
-            string deviceModel = info != null ? info.deviceModel : SystemInfo.deviceModel;
-            string osVersion = info != null ? info.operatingSystem : SystemInfo.operatingSystem;
+            string deviceModel = SystemInfo.deviceModel;
+            string osVersion = SystemInfo.operatingSystem;
             string appVersion = session != null ? session.AppVersion : Application.version;
             string unityVersion = session != null ? session.UnityVersion : Application.unityVersion;
+            string screenResolution = $"{Screen.width}x{Screen.height}";
 
             var sb = new StringBuilder();
             sb.AppendLine("{");
-            sb.AppendLine($"  \"name\": \"{EscapeJson(name)}\",");
-            sb.AppendLine("  \"description\": \"Unity插件自动同步创建\",");
+            sb.AppendLine($"  \"project_id\": {config.projectId},");
+            sb.AppendLine($"  \"session_name_prefix\": \"{EscapeJson(prefix)}\",");
+            sb.AppendLine("  \"description\": \"Unity plugin auto-created session\",");
             sb.AppendLine($"  \"device_model\": \"{EscapeJson(deviceModel)}\",");
             sb.AppendLine($"  \"os_version\": \"{EscapeJson(osVersion)}\",");
             sb.AppendLine("  \"xr_runtime\": \"Unity Editor / OpenXR\",");
             sb.AppendLine($"  \"app_version\": \"{EscapeJson(appVersion)}\",");
-            sb.AppendLine($"  \"scene_id\": {config.sceneId},");
-            sb.AppendLine($"  \"project_id\": {config.projectId},");
+            if (config.sceneId > 0)
+            {
+                sb.AppendLine($"  \"scene_id\": {config.sceneId},");
+            }
+            else
+            {
+                sb.AppendLine("  \"scene_id\": null,");
+            }
             sb.AppendLine("  \"config\": {");
             sb.AppendLine($"    \"unity_version\": \"{EscapeJson(unityVersion)}\",");
-            sb.AppendLine($"    \"gpu_model\": \"{EscapeJson(info != null ? info.graphicsDeviceName : SystemInfo.graphicsDeviceName)}\",");
-            sb.AppendLine($"    \"gpu_vendor\": \"{EscapeJson(info != null ? info.graphicsDeviceVendor : SystemInfo.graphicsDeviceVendor)}\",");
-            sb.AppendLine($"    \"gpu_version\": \"{EscapeJson(info != null ? info.graphicsDeviceVersion : SystemInfo.graphicsDeviceVersion)}\",");
-            sb.AppendLine($"    \"system_memory_mb\": {(info != null ? info.systemMemorySize : SystemInfo.systemMemorySize)},");
-            sb.AppendLine($"    \"gpu_memory_mb\": {(info != null ? info.graphicsMemorySize : SystemInfo.graphicsMemorySize)},");
-            sb.AppendLine($"    \"screen_resolution\": \"{Screen.width}x{Screen.height}\",");
+            sb.AppendLine($"    \"project_name\": \"{EscapeJson(config.projectName)}\",");
+            sb.AppendLine($"    \"gpu_model\": \"{EscapeJson(SystemInfo.graphicsDeviceName)}\",");
+            sb.AppendLine($"    \"gpu_vendor\": \"{EscapeJson(SystemInfo.graphicsDeviceVendor)}\",");
+            sb.AppendLine($"    \"gpu_version\": \"{EscapeJson(SystemInfo.graphicsDeviceVersion)}\",");
+            sb.AppendLine($"    \"cpu_model\": \"{EscapeJson(SystemInfo.processorType)}\",");
+            sb.AppendLine($"    \"processor_count\": {SystemInfo.processorCount},");
+            sb.AppendLine($"    \"system_memory_mb\": {SystemInfo.systemMemorySize},");
+            sb.AppendLine($"    \"gpu_memory_mb\": {SystemInfo.graphicsMemorySize},");
+            sb.AppendLine($"    \"screen_resolution\": \"{EscapeJson(screenResolution)}\",");
             sb.AppendLine("    \"sync_mode\": \"unity_auto_sync\"");
             sb.AppendLine("  }");
             sb.AppendLine("}");
             return sb.ToString();
+        }
+
+        private List<PlatformProject> ParseProjectList(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return new List<PlatformProject>();
+            }
+
+            try
+            {
+                var response = JsonUtility.FromJson<PlatformProjectListResponse>(json);
+                return response != null && response.items != null
+                    ? response.items
+                    : new List<PlatformProject>();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[TestDataUploader] Parse project list failed: {e.Message}");
+                return new List<PlatformProject>();
+            }
         }
 
         private string NormalizeBaseUrl(string value)

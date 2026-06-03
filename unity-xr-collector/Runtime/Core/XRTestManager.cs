@@ -47,6 +47,8 @@ namespace XRDataCollector.Core
         /// </summary>
         public event Action<bool> OnDataUploaded;
 
+        public event Action<int> OnPlatformSessionCreated;
+
         #endregion
 
         #region Fields
@@ -72,6 +74,8 @@ namespace XRDataCollector.Core
         private List<PerformanceSample> samples;
         private float collectTimer;
         private bool isCollecting;
+        private bool isPlatformSessionCreating;
+        private bool pendingUploadAfterPlatformSession;
 
         private FrameRateCollector frameRateCollector;
         private FrameTimeCollector frameTimeCollector;
@@ -107,6 +111,8 @@ namespace XRDataCollector.Core
         /// 当前会话信息
         /// </summary>
         public XRTestSession Session => session;
+
+        public int PlatformSessionId => session != null ? session.PlatformSessionId : 0;
 
         /// <summary>
         /// 当前采集阶段
@@ -280,6 +286,8 @@ namespace XRDataCollector.Core
             samples.Clear();
             collectTimer = 0f;
             isCollecting = true;
+            isPlatformSessionCreating = false;
+            pendingUploadAfterPlatformSession = false;
 
             cachedFrameRate = 0f;
             cachedFrameTimeMs = 0f;
@@ -289,6 +297,7 @@ namespace XRDataCollector.Core
             StartFrameRatePhase();
 
             OnSessionStarted?.Invoke();
+            CreatePlatformSessionForCurrentRun();
             Debug.Log($"[XRTestManager] Session '{config.sessionName}' started. Phase 1: frame rate for 30s.");
         }
 
@@ -311,6 +320,11 @@ namespace XRDataCollector.Core
 
             OnSessionStopped?.Invoke();
             Debug.Log($"[XRTestManager] Session '{config.sessionName}' stopped. Samples collected: {samples.Count}");
+
+            if (config.enableNetworkUpload && samples.Count > 0)
+            {
+                UploadData("", null);
+            }
         }
 
         /// <summary>
@@ -354,6 +368,18 @@ namespace XRDataCollector.Core
             {
                 Debug.LogWarning("[XRTestManager] No samples to upload.");
                 OnDataUploaded?.Invoke(false);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(url) &&
+                config != null &&
+                config.autoCreateSession &&
+                session != null &&
+                session.PlatformSessionId <= 0 &&
+                isPlatformSessionCreating)
+            {
+                pendingUploadAfterPlatformSession = true;
+                Debug.Log("[XRTestManager] Platform session is still being created. Upload will continue after it is ready.");
                 return;
             }
 
@@ -414,6 +440,46 @@ namespace XRDataCollector.Core
         #endregion
 
         #region Private Methods
+
+        private void CreatePlatformSessionForCurrentRun()
+        {
+            EnsureRuntimeState();
+            if (!config.enableNetworkUpload || !config.autoCreateSession || config.projectId <= 0 || session == null)
+            {
+                return;
+            }
+
+            var targetSession = session;
+            isPlatformSessionCreating = true;
+
+            var uploader = new TestDataUploader();
+            uploader.CreatePlatformSessionAsync(config, targetSession, (sessionId, runIndex, platformName, error) =>
+            {
+                isPlatformSessionCreating = false;
+
+                if (targetSession != session)
+                {
+                    return;
+                }
+
+                if (sessionId > 0)
+                {
+                    targetSession.BindPlatformSession(sessionId, runIndex, platformName);
+                    OnPlatformSessionCreated?.Invoke(sessionId);
+                    Debug.Log($"[XRTestManager] Platform session created: {sessionId}, run #{runIndex}.");
+                }
+                else if (!string.IsNullOrEmpty(error))
+                {
+                    Debug.LogError($"[XRTestManager] Platform session create failed: {error}");
+                }
+
+                if (pendingUploadAfterPlatformSession && samples.Count > 0)
+                {
+                    pendingUploadAfterPlatformSession = false;
+                    UploadData("", null);
+                }
+            });
+        }
 
         private void InitializeCollectors()
         {
