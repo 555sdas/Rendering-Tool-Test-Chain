@@ -24,82 +24,37 @@ namespace XRDataCollector.Core
 
         #region Properties
 
-        /// <summary>
-        /// 会话唯一标识符（GUID）
-        /// </summary>
         public string SessionId => sessionId;
-
-        /// <summary>
-        /// 会话名称
-        /// </summary>
         public string SessionName => sessionName;
-
         public int PlatformSessionId => platformSessionId;
-
         public int PlatformRunIndex => platformRunIndex;
-
-        /// <summary>
-        /// 会话开始时间（UTC）
-        /// </summary>
         public DateTime StartTime => startTime;
-
-        /// <summary>
-        /// 会话结束时间（UTC），如果会话仍在进行则为 null
-        /// </summary>
         public DateTime? EndTime => endTime;
-
-        /// <summary>
-        /// 会话是否处于活动状态
-        /// </summary>
         public bool IsActive => isActive;
 
-        /// <summary>
-        /// 会话已运行时长
-        /// </summary>
         public TimeSpan ElapsedTime
         {
             get
             {
                 if (!isActive && endTime.HasValue)
-                {
                     return endTime.Value - startTime;
-                }
                 return DateTime.UtcNow - startTime;
             }
         }
 
-        /// <summary>
-        /// Unity 应用版本号
-        /// </summary>
         public string UnityVersion => Application.unityVersion;
-
-        /// <summary>
-        /// 应用产品名称
-        /// </summary>
         public string ProductName => Application.productName;
-
-        /// <summary>
-        /// 应用版本
-        /// </summary>
         public string AppVersion => Application.version;
-
-        /// <summary>
-        /// 目标平台
-        /// </summary>
         public string Platform => Application.platform.ToString();
 
         #endregion
 
         #region Constructors
 
-        /// <summary>
-        /// 创建新的测试会话
-        /// </summary>
-        /// <param name="name">会话名称</param>
         public XRTestSession(string name)
         {
             sessionId = Guid.NewGuid().ToString("N");
-            sessionName = name ?? "UnnamedSession";
+            sessionName = name ?? "未命名会话";
             startTime = DateTime.UtcNow;
             isActive = false;
         }
@@ -108,65 +63,46 @@ namespace XRDataCollector.Core
 
         #region Public Methods
 
-        /// <summary>
-        /// 启动会话
-        /// </summary>
         public void Start()
         {
             if (isActive) return;
-
             startTime = DateTime.UtcNow;
             endTime = null;
             isActive = true;
-
-            Debug.Log($"[XRTestSession] Session '{sessionName}' ({sessionId}) started at {startTime:O}");
+            Debug.Log($"[XRTestSession] 会话 '{sessionName}' ({sessionId}) 开始于 {startTime:O}");
         }
 
-        /// <summary>
-        /// 停止会话
-        /// </summary>
         public void Stop()
         {
             if (!isActive) return;
-
             endTime = DateTime.UtcNow;
             isActive = false;
-
-            Debug.Log($"[XRTestSession] Session '{sessionName}' stopped at {endTime:O}. Duration: {ElapsedTime.TotalSeconds:F2}s");
+            Debug.Log($"[XRTestSession] 会话 '{sessionName}' 结束于 {endTime:O}，时长：{ElapsedTime.TotalSeconds:F2}秒");
         }
 
         public void BindPlatformSession(int sessionId, int runIndex, string platformSessionName)
         {
             platformSessionId = sessionId;
             platformRunIndex = runIndex;
-
             if (!string.IsNullOrEmpty(platformSessionName))
-            {
                 sessionName = platformSessionName;
-            }
-
-            Debug.Log($"[XRTestSession] Bound local session to platform session {platformSessionId}, run #{platformRunIndex}.");
+            Debug.Log($"[XRTestSession] 本地会话已绑定到平台会话 {platformSessionId}，运行 #{platformRunIndex}。");
         }
 
-        /// <summary>
-        /// 获取会话的摘要信息
-        /// </summary>
-        /// <returns>会话摘要字符串</returns>
         public string GetSummary()
         {
             var duration = ElapsedTime;
-            var status = isActive ? "Active" : "Completed";
-
-            return $"Session: {sessionName}\n" +
-                   $"ID: {sessionId}\n" +
-                   $"Platform Session ID: {(platformSessionId > 0 ? platformSessionId.ToString() : "N/A")}\n" +
-                   $"Status: {status}\n" +
-                   $"Start: {startTime:O}\n" +
-                   $"End: {endTime?.ToString("O") ?? "N/A"}\n" +
-                   $"Duration: {duration.TotalSeconds:F2}s\n" +
-                   $"Unity: {UnityVersion}\n" +
-                   $"App: {ProductName} v{AppVersion}\n" +
-                   $"Platform: {Platform}";
+            var status = isActive ? "进行中" : "已完成";
+            return $"会话：{sessionName}\n" +
+                   $"ID：{sessionId}\n" +
+                   $"平台会话 ID：{(platformSessionId > 0 ? platformSessionId.ToString() : "无")}\n" +
+                   $"状态：{status}\n" +
+                   $"开始：{startTime:O}\n" +
+                   $"结束：{endTime?.ToString("O") ?? "无"}\n" +
+                   $"时长：{duration.TotalSeconds:F2}秒\n" +
+                   $"Unity：{UnityVersion}\n" +
+                   $"应用：{ProductName} v{AppVersion}\n" +
+                   $"平台：{Platform}";
         }
 
         #endregion

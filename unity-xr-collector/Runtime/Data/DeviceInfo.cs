@@ -137,14 +137,14 @@ namespace XRDataCollector.Data
         /// <returns>设备信息摘要字符串</returns>
         public string GetSummary()
         {
-            return $"Device: {deviceModel}\n" +
-                   $"OS: {operatingSystem}\n" +
-                   $"CPU: {processorType} ({processorCount} cores)\n" +
-                   $"RAM: {systemMemorySize}MB\n" +
-                   $"GPU: {graphicsDeviceName}\n" +
-                   $"VRAM: {graphicsMemorySize}MB\n" +
-                   $"Screen: {screenResolution} @ {screenDpi:F0} DPI\n" +
-                   $"XR: {xrDeviceName} (Active: {xrDeviceActive})";
+            return $"设备：{deviceModel}\n" +
+                   $"系统：{operatingSystem}\n" +
+                   $"CPU：{processorType} ({processorCount} 核)\n" +
+                   $"内存：{systemMemorySize}MB\n" +
+                   $"GPU：{graphicsDeviceName}\n" +
+                   $"显存：{graphicsMemorySize}MB\n" +
+                   $"屏幕：{screenResolution} @ {screenDpi:F0} DPI\n" +
+                   $"XR：{xrDeviceName} (激活：{xrDeviceActive})";
         }
 
         #endregion

@@ -13,10 +13,6 @@ using XRDataCollector.Network;
 
 namespace XRDataCollector.Editor
 {
-    /// <summary>
-    /// XR 测试 Editor 窗口
-    /// 提供可视化的测试控制面板，用于在 Unity Editor 中管理测试会话
-    /// </summary>
     public class XRTestWindow : EditorWindow
     {
         #region Fields
@@ -51,7 +47,7 @@ namespace XRDataCollector.Editor
 
         public static void ShowWindow()
         {
-            var window = GetWindow<XRTestWindow>("XR Test");
+            var window = GetWindow<XRTestWindow>("XR 测试");
             window.minSize = new Vector2(400, 500);
             window.Show();
         }
@@ -156,20 +152,20 @@ namespace XRDataCollector.Editor
                 fontStyle = FontStyle.Bold
             };
 
-            EditorGUILayout.LabelField("XR Data Collector", headerStyle, GUILayout.Height(30));
+            EditorGUILayout.LabelField("XR 数据采集器", headerStyle, GUILayout.Height(30));
 
             GUIStyle subHeaderStyle = new GUIStyle(EditorStyles.label)
             {
                 alignment = TextAnchor.MiddleCenter
             };
 
-            EditorGUILayout.LabelField("Performance Testing & Data Collection", subHeaderStyle);
+            EditorGUILayout.LabelField("性能测试与数据采集", subHeaderStyle);
         }
 
         private void DrawControlPanel()
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Control Panel", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("控制面板", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
             var manager = GetManager();
@@ -178,14 +174,14 @@ namespace XRDataCollector.Editor
             EditorGUILayout.BeginHorizontal();
 
             GUI.enabled = !isCollecting;
-            if (GUILayout.Button("Start Collection", GUILayout.Height(40)))
+            if (GUILayout.Button("开始采集", GUILayout.Height(40)))
             {
                 StartCollection();
             }
             GUI.enabled = true;
 
             GUI.enabled = isCollecting;
-            if (GUILayout.Button("Stop Collection", GUILayout.Height(40)))
+            if (GUILayout.Button("停止采集", GUILayout.Height(40)))
             {
                 StopCollection();
             }
@@ -201,21 +197,21 @@ namespace XRDataCollector.Editor
                 fontStyle = FontStyle.Bold
             };
 
-            string statusText = isCollecting ? "Collecting..." : "Idle";
+            string statusText = isCollecting ? "采集中..." : "空闲";
             Color statusColor = isCollecting ? Color.green : Color.gray;
 
             GUI.color = statusColor;
-            EditorGUILayout.LabelField($"Status: {statusText}", statusStyle);
+            EditorGUILayout.LabelField($"状态：{statusText}", statusStyle);
             GUI.color = Color.white;
 
             if (manager != null)
             {
-                EditorGUILayout.LabelField($"Phase: {manager.CurrentCollectionPhase}");
+                EditorGUILayout.LabelField($"阶段：{manager.CurrentCollectionPhase}");
                 if (manager.IsCollecting)
                 {
-                    EditorGUILayout.LabelField($"Phase Remaining: {manager.CurrentPhaseRemainingSeconds:F1} s");
+                    EditorGUILayout.LabelField($"剩余时间：{manager.CurrentPhaseRemainingSeconds:F1} 秒");
                 }
-                EditorGUILayout.LabelField($"Samples Collected: {manager.GetSampleCount()}");
+                EditorGUILayout.LabelField($"已采集样本数：{manager.GetSampleCount()}");
             }
 
             EditorGUILayout.EndVertical();
@@ -223,8 +219,7 @@ namespace XRDataCollector.Editor
 
         private void DrawSessionInfo()
         {
-            showSessionInfo = EditorGUILayout.Foldout(showSessionInfo, "Session Info", true, EditorStyles.foldoutHeader);
-
+            showSessionInfo = EditorGUILayout.Foldout(showSessionInfo, "会话信息", true, EditorStyles.foldoutHeader);
             if (!showSessionInfo) return;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -234,22 +229,22 @@ namespace XRDataCollector.Editor
             {
                 var session = manager.Session;
 
-                EditorGUILayout.LabelField("Session Name:", session.SessionName);
-                EditorGUILayout.LabelField("Session ID:", session.SessionId);
-                EditorGUILayout.LabelField("Platform Session ID:", session.PlatformSessionId > 0 ? session.PlatformSessionId.ToString() : "Not synced yet");
-                EditorGUILayout.LabelField("Platform Run Index:", session.PlatformRunIndex > 0 ? session.PlatformRunIndex.ToString() : "-");
-                EditorGUILayout.LabelField("Start Time:", session.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
-                EditorGUILayout.LabelField("Duration:", $"{session.ElapsedTime.TotalSeconds:F2} s");
-                EditorGUILayout.LabelField("Status:", session.IsActive ? "Active" : "Stopped");
+                EditorGUILayout.LabelField("会话名称：", session.SessionName);
+                EditorGUILayout.LabelField("会话 ID：", session.SessionId);
+                EditorGUILayout.LabelField("平台会话 ID：", session.PlatformSessionId > 0 ? session.PlatformSessionId.ToString() : "尚未同步");
+                EditorGUILayout.LabelField("运行索引：", session.PlatformRunIndex > 0 ? session.PlatformRunIndex.ToString() : "-");
+                EditorGUILayout.LabelField("开始时间：", session.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"));
+                EditorGUILayout.LabelField("已运行时长：", $"{session.ElapsedTime.TotalSeconds:F2} 秒");
+                EditorGUILayout.LabelField("状态：", session.IsActive ? "进行中" : "已停止");
                 EditorGUILayout.Space(5);
-                EditorGUILayout.LabelField("Unity Version:", session.UnityVersion);
-                EditorGUILayout.LabelField("Product:", session.ProductName);
-                EditorGUILayout.LabelField("App Version:", session.AppVersion);
-                EditorGUILayout.LabelField("Platform:", session.Platform);
+                EditorGUILayout.LabelField("Unity 版本：", session.UnityVersion);
+                EditorGUILayout.LabelField("产品名称：", session.ProductName);
+                EditorGUILayout.LabelField("应用版本：", session.AppVersion);
+                EditorGUILayout.LabelField("目标平台：", session.Platform);
             }
             else
             {
-                EditorGUILayout.HelpBox("No active session. Start collection to see session info.", MessageType.Info);
+                EditorGUILayout.HelpBox("暂无活动会话。开始采集后即可查看会话信息。", MessageType.Info);
             }
 
             EditorGUILayout.EndVertical();
@@ -257,8 +252,7 @@ namespace XRDataCollector.Editor
 
         private void DrawLatestSample()
         {
-            showLatestSample = EditorGUILayout.Foldout(showLatestSample, "Latest Sample", true, EditorStyles.foldoutHeader);
-
+            showLatestSample = EditorGUILayout.Foldout(showLatestSample, "最新样本", true, EditorStyles.foldoutHeader);
             if (!showLatestSample) return;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -270,28 +264,28 @@ namespace XRDataCollector.Editor
 
                 if (sample != null)
                 {
-                    EditorGUILayout.LabelField("Timestamp:", sample.timestamp.ToLocalTime().ToString("HH:mm:ss.fff"));
-                    EditorGUILayout.LabelField("Phase:", sample.collectionPhase ?? "-");
-                    EditorGUILayout.LabelField("Frame Rate:", $"{sample.frameRate:F1} FPS");
-                    EditorGUILayout.LabelField("Frame Time:", $"{sample.frameTimeMs:F2} ms");
-                    EditorGUILayout.LabelField("CPU Usage:", $"{sample.cpuUsagePercent:F1} %");
-                    EditorGUILayout.LabelField("GPU Usage:", $"{sample.gpuUsagePercent:F1} %");
-                    EditorGUILayout.LabelField("Draw Calls:", sample.drawCalls.ToString());
-                    EditorGUILayout.LabelField("Triangles:", sample.triangles.ToString());
-                    EditorGUILayout.LabelField("Total Memory:", $"{sample.totalMemoryMB:F1} MB");
-                    EditorGUILayout.LabelField("Managed Memory:", $"{sample.managedMemoryMB:F1} MB");
-                    EditorGUILayout.LabelField("Graphics Memory:", $"{sample.graphicsMemoryMB:F1} MB");
-                    EditorGUILayout.LabelField("XR Active:", sample.isXrActive.ToString());
-                    EditorGUILayout.LabelField("XR Device:", sample.xrDeviceName ?? "N/A");
+                    EditorGUILayout.LabelField("时间戳：", sample.timestamp.ToLocalTime().ToString("HH:mm:ss.fff"));
+                    EditorGUILayout.LabelField("阶段：", sample.collectionPhase ?? "-");
+                    EditorGUILayout.LabelField("帧率：", $"{sample.frameRate:F1} FPS");
+                    EditorGUILayout.LabelField("帧时间：", $"{sample.frameTimeMs:F2} 毫秒");
+                    EditorGUILayout.LabelField("CPU 占用：", $"{sample.cpuUsagePercent:F1} %");
+                    EditorGUILayout.LabelField("GPU 占用：", $"{sample.gpuUsagePercent:F1} %");
+                    EditorGUILayout.LabelField("Draw Calls：", sample.drawCalls.ToString());
+                    EditorGUILayout.LabelField("三角面数：", sample.triangles.ToString());
+                    EditorGUILayout.LabelField("总内存：", $"{sample.totalMemoryMB:F1} MB");
+                    EditorGUILayout.LabelField("托管内存：", $"{sample.managedMemoryMB:F1} MB");
+                    EditorGUILayout.LabelField("显存：", $"{sample.graphicsMemoryMB:F1} MB");
+                    EditorGUILayout.LabelField("XR 激活：", sample.isXrActive.ToString());
+                    EditorGUILayout.LabelField("XR 设备：", sample.xrDeviceName ?? "无");
                 }
                 else
                 {
-                    EditorGUILayout.HelpBox("No samples collected yet.", MessageType.Info);
+                    EditorGUILayout.HelpBox("尚未采集样本。", MessageType.Info);
                 }
             }
             else
             {
-                EditorGUILayout.HelpBox("XRTestManager not found in scene. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Warning);
+                EditorGUILayout.HelpBox("场景中未找到 XRTestManager。请通过 XR 测试 → 设置 → 创建 XRTestManager 来添加。", MessageType.Warning);
             }
 
             EditorGUILayout.EndVertical();
@@ -300,14 +294,14 @@ namespace XRDataCollector.Editor
         private void DrawExportPanel()
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Export Data", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("导出数据", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
             EditorGUILayout.BeginHorizontal();
-            exportPath = EditorGUILayout.TextField("Export Path:", exportPath);
-            if (GUILayout.Button("Browse", GUILayout.Width(60)))
+            exportPath = EditorGUILayout.TextField("导出路径：", exportPath);
+            if (GUILayout.Button("浏览", GUILayout.Width(60)))
             {
-                string selectedPath = EditorUtility.SaveFolderPanel("Select Export Directory", exportPath, "");
+                string selectedPath = EditorUtility.SaveFolderPanel("选择导出目录", exportPath, "");
                 if (!string.IsNullOrEmpty(selectedPath))
                 {
                     exportPath = selectedPath;
@@ -319,12 +313,12 @@ namespace XRDataCollector.Editor
 
             EditorGUILayout.BeginHorizontal();
 
-            if (GUILayout.Button("Export as JSON"))
+            if (GUILayout.Button("导出为 JSON"))
             {
                 ExportData(ExportFormat.Json);
             }
 
-            if (GUILayout.Button("Export as CSV"))
+            if (GUILayout.Button("导出为 CSV"))
             {
                 ExportData(ExportFormat.Csv);
             }
@@ -337,25 +331,25 @@ namespace XRDataCollector.Editor
         private void DrawUploadPanel()
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Platform Sync", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("平台同步", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
             var manager = GetManager();
             if (manager != null && manager.Config != null)
             {
-                EditorGUILayout.LabelField("Platform:", manager.Config.platformBaseUrl);
-                EditorGUILayout.LabelField("Mode:", manager.Config.autoCreateSession ? "Auto create session and upload" : "Upload to configured URL");
+                EditorGUILayout.LabelField("平台地址：", manager.Config.platformBaseUrl);
+                EditorGUILayout.LabelField("模式：", manager.Config.autoCreateSession ? "自动创建会话并上传" : "上传到指定地址");
                 DrawProjectSyncControls(manager);
             }
             else
             {
-                EditorGUILayout.HelpBox("XRTestManager not found. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Info);
+                EditorGUILayout.HelpBox("未找到 XRTestManager。请通过 XR 测试 → 设置 → 创建 XRTestManager 来添加。", MessageType.Info);
             }
 
             EditorGUILayout.Space(5);
 
             GUI.enabled = manager != null;
-            if (GUILayout.Button("Upload / Sync to Platform", GUILayout.Height(32)))
+            if (GUILayout.Button("上传/同步到平台", GUILayout.Height(32)))
             {
                 UploadData();
             }
@@ -369,11 +363,11 @@ namespace XRDataCollector.Editor
             var config = manager.Config;
 
             EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("Project Sync", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("项目同步", EditorStyles.boldLabel);
 
             EditorGUILayout.BeginHorizontal();
             GUI.enabled = !isProjectSyncing;
-            if (GUILayout.Button(isProjectSyncing ? "Refreshing..." : "Refresh Projects", GUILayout.Height(24)))
+            if (GUILayout.Button(isProjectSyncing ? "刷新中..." : "刷新项目列表", GUILayout.Height(24)))
             {
                 RefreshPlatformProjects();
             }
@@ -391,7 +385,7 @@ namespace XRDataCollector.Editor
                 }
 
                 int currentIndex = selectedProjectIndex >= 0 ? selectedProjectIndex : 0;
-                int newIndex = EditorGUILayout.Popup("Project:", currentIndex, options);
+                int newIndex = EditorGUILayout.Popup("项目：", currentIndex, options);
                 if (newIndex != selectedProjectIndex)
                 {
                     SelectPlatformProject(manager, newIndex);
@@ -400,27 +394,26 @@ namespace XRDataCollector.Editor
             else
             {
                 string projectLabel = string.IsNullOrEmpty(config.projectName)
-                    ? $"Project ID {config.projectId}"
+                    ? $"项目 ID {config.projectId}"
                     : $"{config.projectName} (ID {config.projectId})";
-                EditorGUILayout.LabelField("Selected Project:", projectLabel);
-                EditorGUILayout.HelpBox("Click Refresh Projects after creating a project in the web platform.", MessageType.Info);
+                EditorGUILayout.LabelField("当前项目：", projectLabel);
+                EditorGUILayout.HelpBox("在管理后台创建项目后，点击「刷新项目列表」获取。", MessageType.Info);
             }
 
             if (config.projectId <= 0)
             {
-                EditorGUILayout.HelpBox("Select a platform project before starting synced collection.", MessageType.Warning);
+                EditorGUILayout.HelpBox("请先选择项目再开始同步采集。", MessageType.Warning);
             }
 
             if (manager.PlatformSessionId > 0)
             {
-                EditorGUILayout.LabelField("Platform Session ID:", manager.PlatformSessionId.ToString());
+                EditorGUILayout.LabelField("平台会话 ID：", manager.PlatformSessionId.ToString());
             }
         }
 
         private void DrawSettings()
         {
-            showSettings = EditorGUILayout.Foldout(showSettings, "Settings", true, EditorStyles.foldoutHeader);
-
+            showSettings = EditorGUILayout.Foldout(showSettings, "设置", true, EditorStyles.foldoutHeader);
             if (!showSettings) return;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -432,33 +425,33 @@ namespace XRDataCollector.Editor
 
                 EditorGUI.BeginChangeCheck();
 
-                config.sessionName = EditorGUILayout.TextField("Session Name:", config.sessionName);
-                config.collectInterval = EditorGUILayout.Slider("Collect Interval (s):", config.collectInterval, 0.1f, 10f);
-                config.autoStart = EditorGUILayout.Toggle("Auto Start:", config.autoStart);
-                config.autoExportOnQuit = EditorGUILayout.Toggle("Auto Export On Quit:", config.autoExportOnQuit);
-                config.enableNetworkUpload = EditorGUILayout.Toggle("Enable Network Upload:", config.enableNetworkUpload);
+                config.sessionName = EditorGUILayout.TextField("会话名称：", config.sessionName);
+                config.collectInterval = EditorGUILayout.Slider("采集间隔（秒）：", config.collectInterval, 0.1f, 10f);
+                config.autoStart = EditorGUILayout.Toggle("启动时自动采集：", config.autoStart);
+                config.autoExportOnQuit = EditorGUILayout.Toggle("退出时自动导出：", config.autoExportOnQuit);
+                config.enableNetworkUpload = EditorGUILayout.Toggle("启用网络上传：", config.enableNetworkUpload);
 
                 EditorGUILayout.Space(5);
-                EditorGUILayout.LabelField("Platform Sync", EditorStyles.boldLabel);
-                config.platformBaseUrl = EditorGUILayout.TextField("Platform API Base URL:", config.platformBaseUrl);
-                config.autoCreateSession = EditorGUILayout.Toggle("Auto Create Session:", config.autoCreateSession);
-                config.projectId = EditorGUILayout.IntField("Project ID:", config.projectId);
-                config.projectName = EditorGUILayout.TextField("Project Name:", config.projectName);
-                config.sceneId = EditorGUILayout.IntField("Scene ID:", config.sceneId);
-                config.uploadUrl = EditorGUILayout.TextField("Fixed Upload URL:", config.uploadUrl);
-                config.authToken = EditorGUILayout.PasswordField("Bearer Token:", config.authToken);
-                config.username = EditorGUILayout.TextField("Username:", config.username);
-                config.password = EditorGUILayout.PasswordField("Password:", config.password);
+                EditorGUILayout.LabelField("平台同步", EditorStyles.boldLabel);
+                config.platformBaseUrl = EditorGUILayout.TextField("平台 API 地址：", config.platformBaseUrl);
+                config.autoCreateSession = EditorGUILayout.Toggle("自动创建会话：", config.autoCreateSession);
+                config.projectId = EditorGUILayout.IntField("项目 ID：", config.projectId);
+                config.projectName = EditorGUILayout.TextField("项目名称：", config.projectName);
+                config.sceneId = EditorGUILayout.IntField("场景 ID：", config.sceneId);
+                config.uploadUrl = EditorGUILayout.TextField("固定上传地址：", config.uploadUrl);
+                config.authToken = EditorGUILayout.PasswordField("Bearer 令牌：", config.authToken);
+                config.username = EditorGUILayout.TextField("用户名：", config.username);
+                config.password = EditorGUILayout.PasswordField("密码：", config.password);
 
                 EditorGUILayout.Space(5);
-                EditorGUILayout.LabelField("Collectors", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("采集器", EditorStyles.boldLabel);
 
-                config.collectFrameRate = EditorGUILayout.Toggle("Frame Rate:", config.collectFrameRate);
-                config.collectFrameTime = EditorGUILayout.Toggle("Frame Time:", config.collectFrameTime);
-                config.collectCpuUsage = EditorGUILayout.Toggle("CPU Usage:", config.collectCpuUsage);
-                config.collectGpuUsage = EditorGUILayout.Toggle("GPU Usage:", config.collectGpuUsage);
-                config.collectMemory = EditorGUILayout.Toggle("Memory:", config.collectMemory);
-                config.collectDeviceInfo = EditorGUILayout.Toggle("Device Info:", config.collectDeviceInfo);
+                config.collectFrameRate = EditorGUILayout.Toggle("帧率：", config.collectFrameRate);
+                config.collectFrameTime = EditorGUILayout.Toggle("帧时间：", config.collectFrameTime);
+                config.collectCpuUsage = EditorGUILayout.Toggle("CPU 占用：", config.collectCpuUsage);
+                config.collectGpuUsage = EditorGUILayout.Toggle("GPU 占用：", config.collectGpuUsage);
+                config.collectMemory = EditorGUILayout.Toggle("内存：", config.collectMemory);
+                config.collectDeviceInfo = EditorGUILayout.Toggle("设备信息：", config.collectDeviceInfo);
 
                 if (EditorGUI.EndChangeCheck())
                 {
@@ -467,7 +460,7 @@ namespace XRDataCollector.Editor
             }
             else
             {
-                EditorGUILayout.HelpBox("XRTestManager not found. Use XR Test -> Setup -> Create XRTestManager first.", MessageType.Info);
+                EditorGUILayout.HelpBox("未找到 XRTestManager。请通过 XR 测试 → 设置 → 创建 XRTestManager 来添加。", MessageType.Info);
             }
 
             EditorGUILayout.EndVertical();
@@ -492,14 +485,14 @@ namespace XRDataCollector.Editor
             {
                 SessionState.SetBool(PendingStartAfterPlayModeKey, true);
                 EditorApplication.isPlaying = true;
-                ShowStatus("Entering Play Mode. Collection will start automatically.", MessageType.Info);
+                ShowStatus("正在进入运行模式，采集将自动开始。", MessageType.Info);
                 return;
             }
 
             var manager = GetManager();
             if (manager == null)
             {
-                ShowStatus("XRTestManager not found. Please add it to a GameObject in the scene.", MessageType.Error);
+                ShowStatus("未找到 XRTestManager，请将其添加到场景中的 GameObject 上。", MessageType.Error);
                 return;
             }
 
@@ -508,7 +501,7 @@ namespace XRDataCollector.Editor
                 manager.Config.autoCreateSession &&
                 manager.Config.projectId <= 0)
             {
-                ShowStatus("Select a platform project before starting synced collection.", MessageType.Error);
+                ShowStatus("请先选择项目再开始同步采集。", MessageType.Error);
                 return;
             }
 
@@ -519,7 +512,6 @@ namespace XRDataCollector.Editor
         {
             var manager = GetManager();
             if (manager == null) return;
-
             manager.StopCollection();
         }
 
@@ -528,45 +520,39 @@ namespace XRDataCollector.Editor
             var manager = GetManager();
             if (manager == null)
             {
-                ShowStatus("XRTestManager not found.", MessageType.Error);
+                ShowStatus("未找到 XRTestManager。", MessageType.Error);
                 return;
             }
 
             if (manager.GetSampleCount() == 0)
             {
-                ShowStatus("No samples to export.", MessageType.Warning);
+                ShowStatus("没有可导出的样本。", MessageType.Error);
                 return;
             }
 
+            string extension = format == ExportFormat.Json ? "json" : "csv";
+            string defaultName = $"XRTest_{DateTime.Now:yyyyMMdd_HHmmss}.{extension}";
+            string filePath = EditorUtility.SaveFilePanel(
+                $"导出为 {format}",
+                exportPath,
+                defaultName,
+                extension
+            );
+
+            if (string.IsNullOrEmpty(filePath)) return;
+
             try
             {
-                string fileName = $"XRTest_{DateTime.Now:yyyyMMdd_HHmmss}";
-                IDataExporter exporter;
-                string extension;
-
-                if (format == ExportFormat.Json)
-                {
-                    exporter = new JsonExporter();
-                    extension = ".json";
-                }
-                else
-                {
-                    exporter = new CsvExporter();
-                    extension = ".csv";
-                }
-
-                string filePath = Path.Combine(exportPath, fileName + extension);
-
-                if (!Directory.Exists(exportPath))
-                {
-                    Directory.CreateDirectory(exportPath);
-                }
+                IDataExporter exporter = format == ExportFormat.Json
+                    ? new Exporters.JsonExporter()
+                    : new Exporters.CsvExporter();
 
                 manager.ExportData(exporter, filePath);
+                ShowStatus($"数据已导出至：{filePath}", MessageType.Info);
             }
             catch (Exception e)
             {
-                ShowStatus($"Export failed: {e.Message}", MessageType.Error);
+                ShowStatus($"导出失败：{e.Message}", MessageType.Error);
             }
         }
 
@@ -575,36 +561,32 @@ namespace XRDataCollector.Editor
             var manager = GetManager();
             if (manager == null)
             {
-                ShowStatus("XRTestManager not found.", MessageType.Error);
+                ShowStatus("未找到 XRTestManager。", MessageType.Error);
                 return;
             }
 
             if (manager.GetSampleCount() == 0)
             {
-                ShowStatus("No samples to upload.", MessageType.Warning);
+                ShowStatus("没有可上传的样本。", MessageType.Error);
                 return;
             }
 
-            manager.UploadData("", null);
-            ShowStatus("Syncing data to platform...", MessageType.Info);
+            manager.UploadData("");
         }
 
         private void RefreshPlatformProjects()
         {
             var manager = GetManager();
-            if (manager == null || manager.Config == null)
+            if (manager == null)
             {
-                ShowStatus("XRTestManager not found.", MessageType.Error);
+                ShowStatus("XRTestManager 未找到。", MessageType.Error);
                 return;
             }
 
-            if (isProjectSyncing)
-            {
-                return;
-            }
+            if (isProjectSyncing) return;
 
             isProjectSyncing = true;
-            ShowStatus("Refreshing platform projects...", MessageType.Info);
+            ShowStatus("正在刷新平台项目列表...", MessageType.Info);
 
             if (!EditorApplication.isPlaying)
             {
@@ -612,11 +594,11 @@ namespace XRDataCollector.Editor
                 {
                     var projects = LoadProjectsInEditor(manager.Config);
                     ApplyLoadedProjects(manager, projects);
-                    ShowStatus($"Loaded {platformProjects.Count} platform projects.", MessageType.Info);
+                    ShowStatus($"已加载 {platformProjects.Count} 个平台项目。", MessageType.Info);
                 }
                 catch (Exception e)
                 {
-                    ShowStatus($"Refresh projects failed: {e.Message}", MessageType.Error);
+                    ShowStatus($"刷新项目列表失败：{e.Message}", MessageType.Error);
                 }
                 finally
                 {
@@ -630,16 +612,14 @@ namespace XRDataCollector.Editor
             uploader.LoadProjectsAsync(manager.Config, (projects, error) =>
             {
                 isProjectSyncing = false;
-
                 if (!string.IsNullOrEmpty(error))
                 {
                     ShowStatus(error, MessageType.Error);
                     Repaint();
                     return;
                 }
-
                 ApplyLoadedProjects(manager, projects);
-                ShowStatus($"Loaded {platformProjects.Count} platform projects.", MessageType.Info);
+                ShowStatus($"已加载 {platformProjects.Count} 个平台项目。", MessageType.Info);
                 Repaint();
             });
         }
@@ -655,52 +635,41 @@ namespace XRDataCollector.Editor
 
         private void OnSessionStarted()
         {
-            ShowStatus("Session started.", MessageType.Info);
+            ShowStatus("会话已开始。", MessageType.Info);
             Repaint();
         }
 
         private void OnSessionStopped()
         {
-            ShowStatus("Session stopped.", MessageType.Info);
+            ShowStatus("会话已停止。", MessageType.Info);
             Repaint();
         }
 
         private void OnDataExported(string path)
         {
-            ShowStatus($"Data exported to: {path}", MessageType.Info);
+            ShowStatus($"数据已导出至：{path}", MessageType.Info);
             Repaint();
         }
 
         private void OnDataUploaded(bool success)
         {
             if (success)
-            {
-                ShowStatus("Data uploaded successfully.", MessageType.Info);
-            }
+                ShowStatus("数据上传成功。", MessageType.Info);
             else
-            {
-                ShowStatus("Data upload failed.", MessageType.Error);
-            }
+                ShowStatus("数据上传失败。", MessageType.Error);
             Repaint();
         }
 
         private void OnPlatformSessionCreated(int sessionId)
         {
-            ShowStatus($"Platform session {sessionId} created.", MessageType.Info);
+            ShowStatus($"平台会话 {sessionId} 已创建。", MessageType.Info);
             Repaint();
         }
 
         private void OnPlayModeStateChanged(PlayModeStateChange state)
         {
-            if (state != PlayModeStateChange.EnteredPlayMode)
-            {
-                return;
-            }
-
-            if (!SessionState.GetBool(PendingStartAfterPlayModeKey, false))
-            {
-                return;
-            }
+            if (state != PlayModeStateChange.EnteredPlayMode) return;
+            if (!SessionState.GetBool(PendingStartAfterPlayModeKey, false)) return;
 
             SessionState.SetBool(PendingStartAfterPlayModeKey, false);
             EditorApplication.delayCall += StartPendingCollection;
@@ -711,10 +680,9 @@ namespace XRDataCollector.Editor
             var manager = GetManager();
             if (manager == null)
             {
-                ShowStatus("XRTestManager not found after entering Play Mode.", MessageType.Error);
+                ShowStatus("进入运行模式后未找到 XRTestManager。", MessageType.Error);
                 return;
             }
-
             manager.StartCollection();
         }
 
@@ -732,10 +700,7 @@ namespace XRDataCollector.Editor
         private void SyncSelectedProjectIndex(XRTestConfig config)
         {
             selectedProjectIndex = -1;
-            if (config == null)
-            {
-                return;
-            }
+            if (config == null) return;
 
             for (int i = 0; i < platformProjects.Count; i++)
             {
@@ -751,15 +716,11 @@ namespace XRDataCollector.Editor
         {
             platformProjects.Clear();
             if (projects != null)
-            {
                 platformProjects.AddRange(projects);
-            }
 
             SyncSelectedProjectIndex(manager.Config);
             if (selectedProjectIndex < 0 && platformProjects.Count > 0)
-            {
                 SelectPlatformProject(manager, 0);
-            }
 
             EditorUtility.SetDirty(manager);
         }
@@ -768,9 +729,7 @@ namespace XRDataCollector.Editor
         {
             string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
             if (string.IsNullOrEmpty(baseUrl))
-            {
-                throw new InvalidOperationException("Platform base URL is empty.");
-            }
+                throw new InvalidOperationException("平台 API 地址为空。");
 
             string token = config.authToken;
             if (string.IsNullOrEmpty(token))
@@ -780,30 +739,18 @@ namespace XRDataCollector.Editor
             }
 
             if (string.IsNullOrEmpty(token))
-            {
-                throw new InvalidOperationException("Login failed. Check username, password, or token.");
-            }
+                throw new InvalidOperationException("登录失败，请检查用户名、密码或令牌。");
 
-            string json = SendEditorRequest(
-                "GET",
-                $"{baseUrl}/data-collection/platform/projects?limit=100",
-                null,
-                null,
-                token);
+            string json = SendEditorRequest("GET", $"{baseUrl}/data-collection/platform/projects?limit=100", null, null, token);
             return ParseProjectList(json);
         }
 
         private string LoginInEditor(string baseUrl, string username, string password)
         {
-            string body =
-                "username=" + Uri.EscapeDataString(username ?? "") +
-                "&password=" + Uri.EscapeDataString(password ?? "");
-            string json = SendEditorRequest(
-                "POST",
-                $"{baseUrl}/auth/login",
-                "application/x-www-form-urlencoded",
-                body,
-                null);
+            string body = "username=" + Uri.EscapeDataString(username ?? "") +
+                          "&password=" + Uri.EscapeDataString(password ?? "");
+            string json = SendEditorRequest("POST", $"{baseUrl}/auth/login",
+                "application/x-www-form-urlencoded", body, null);
             return ExtractStringField(json, "access_token");
         }
 
@@ -814,9 +761,7 @@ namespace XRDataCollector.Editor
             request.Timeout = 30000;
 
             if (!string.IsNullOrEmpty(token))
-            {
                 request.Headers["Authorization"] = "Bearer " + token;
-            }
 
             if (!string.IsNullOrEmpty(body))
             {
@@ -824,9 +769,7 @@ namespace XRDataCollector.Editor
                 request.ContentType = contentType ?? "application/json";
                 request.ContentLength = raw.Length;
                 using (var stream = request.GetRequestStream())
-                {
                     stream.Write(raw, 0, raw.Length);
-                }
             }
 
             using (var response = (HttpWebResponse)request.GetResponse())
@@ -846,10 +789,7 @@ namespace XRDataCollector.Editor
 
         private string NormalizeBaseUrl(string value)
         {
-            if (string.IsNullOrEmpty(value))
-            {
-                return "";
-            }
+            if (string.IsNullOrEmpty(value)) return "";
             return value.Trim().TrimEnd('/');
         }
 
@@ -862,9 +802,7 @@ namespace XRDataCollector.Editor
         private void SelectPlatformProject(XRTestManager manager, int index)
         {
             if (manager == null || manager.Config == null || index < 0 || index >= platformProjects.Count)
-            {
                 return;
-            }
 
             var project = platformProjects[index];
             selectedProjectIndex = index;
@@ -873,7 +811,7 @@ namespace XRDataCollector.Editor
             manager.Config.sessionName = string.IsNullOrEmpty(project.name) ? "Unity Test" : project.name + " Unity Test";
 
             EditorUtility.SetDirty(manager);
-            ShowStatus($"Selected project {project.name} (next session #{project.next_session_index}).", MessageType.Info);
+            ShowStatus($"已选择项目 {project.name}（下次会话 #{project.next_session_index}）。", MessageType.Info);
             Repaint();
         }
 
