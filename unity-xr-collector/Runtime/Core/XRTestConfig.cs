@@ -54,7 +54,7 @@ namespace XRDataCollector.Core
         /// 平台 API 根地址。部署到服务器后通常只需要改这里。
         /// </summary>
         [Tooltip("平台 API 根地址")]
-        public string platformBaseUrl = "http://localhost";
+        public string platformBaseUrl = "http://localhost:8000";
 
         /// <summary>
         /// 是否由插件自动在平台创建测试会话。

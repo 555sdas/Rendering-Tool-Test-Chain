@@ -475,9 +475,10 @@ namespace XRDataCollector.Network
         {
             var sb = new StringBuilder();
             sb.AppendLine("{");
-            sb.AppendLine($"  \"projectId\": {config.projectId},");
-            sb.AppendLine($"  \"sceneId\": {config.sceneId},");
-            sb.AppendLine($"  \"sessionName\": \"{EscapeJson(session?.SessionName ?? config.sessionName)}\",");
+            sb.AppendLine($"  \"project_id\": {config.projectId},");
+            if (config.sceneId > 0)
+                sb.AppendLine($"  \"scene_id\": {config.sceneId},");
+            sb.AppendLine($"  \"session_name_prefix\": \"{EscapeJson(session?.SessionName ?? config.sessionName)}\",");
             sb.AppendLine($"  \"description\": \"Unity auto-created session for project {config.projectId}\"");
             sb.AppendLine("}");
             return sb.ToString();
