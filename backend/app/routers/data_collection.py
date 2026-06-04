@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models.user import User
 from app.models.project import Project
+from app.models.scene_asset import SceneAsset
 from app.models.test_session import TestSession, TestSessionStatus
 from app.models.test_task import TestTask, TestTaskStatus
 from app.models.performance_sample import PerformanceSample
@@ -222,6 +223,12 @@ async def auto_start_platform_test_session(
             detail="Project not found",
         )
 
+    scene_id = session_data.scene_id
+    if scene_id:
+        scene = db.query(SceneAsset).filter(SceneAsset.id == scene_id).first()
+        if not scene:
+            scene_id = None
+
     session_count = (
         db.query(func.count(TestSession.id))
         .filter(TestSession.project_id == project.id)
@@ -250,7 +257,7 @@ async def auto_start_platform_test_session(
         os_version=session_data.os_version,
         xr_runtime=session_data.xr_runtime,
         app_version=session_data.app_version,
-        scene_id=session_data.scene_id,
+        scene_id=scene_id,
         user_id=current_user.id,
         project_id=project.id,
         config=config,

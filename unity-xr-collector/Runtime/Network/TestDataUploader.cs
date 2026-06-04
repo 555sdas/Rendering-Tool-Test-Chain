@@ -263,7 +263,7 @@ namespace XRDataCollector.Network
                 int sessionId = session != null ? session.PlatformSessionId : 0;
                 if (sessionId <= 0)
                 {
-                    int runIndex = 0;
+                    int runIndex = 0;  
                     string platformName = null;
                     string error = null;
                     yield return CreatePlatformSessionCoroutine(baseUrl, token, config, session,
@@ -329,15 +329,52 @@ namespace XRDataCollector.Network
             }
         }
 
+        private IEnumerator DeviceTokenLoginCoroutine(string baseUrl, string deviceToken, Action<string> callback)
+        {
+            string body = "{\"device_token\":\"" + UnityWebRequest.EscapeURL(deviceToken ?? "") + "\"}";
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
+
+            using (var request = new UnityWebRequest($"{baseUrl}/auth/device-token/login", "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                request.timeout = 30;
+                yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+                bool success = request.result == UnityWebRequest.Result.Success;
+#else
+                bool success = !request.isNetworkError && !request.isHttpError;
+#endif
+                if (!success)
+                {
+                    Debug.LogError($"[TestDataUploader] 设备令牌登录失败：{request.error} {request.downloadHandler.text}");
+                    callback?.Invoke(null);
+                    yield break;
+                }
+                callback?.Invoke(ExtractStringField(request.downloadHandler.text, "access_token"));
+            }
+        }
+
         private IEnumerator EnsureAuthTokenCoroutine(XRTestConfig config, string baseUrl, Action<string> callback)
         {
-            string token = config.authToken;
-            if (string.IsNullOrEmpty(token))
+            string token = null;
+
+            // 优先使用设备令牌登录
+            if (!string.IsNullOrEmpty(config.deviceToken))
             {
-                yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
+                yield return DeviceTokenLoginCoroutine(baseUrl, config.deviceToken, value => token = value);
                 if (!string.IsNullOrEmpty(token))
-                    config.authToken = token;
+                {
+                    callback?.Invoke(token);
+                    yield break;
+                }
+                Debug.LogWarning("[TestDataUploader] 设备令牌登录失败，回退到用户名密码登录。");
             }
+
+            // 回退到用户名密码登录
+            yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
             callback?.Invoke(token);
         }
 

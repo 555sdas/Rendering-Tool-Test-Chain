@@ -282,7 +282,7 @@ namespace XRDataCollector.Core
                 return;
             }
 
-            string token = string.IsNullOrEmpty(authToken) ? config?.authToken : authToken;
+            string token = string.IsNullOrEmpty(authToken) ? config?.deviceToken : authToken;
             uploader.UploadAsync(samples, session, url, token, success => OnDataUploaded?.Invoke(success));
         }
 

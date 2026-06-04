@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     ALGORITHM: str = "HS256"
 
+    DEVICE_TOKEN: str = "xr-device-token-default"
+    DEVICE_TOKEN_USERNAME: str = "admin"
+
     PASSWORD_MIN_LENGTH: int = 8
     MAX_LOGIN_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 30

@@ -67,7 +67,6 @@ namespace XRDataCollector.Editor
                 if (manager.Config != null)
                 {
                     uploadUrl = manager.Config.uploadUrl;
-                    authToken = manager.Config.authToken;
                 }
 
                 manager.OnSampleCollected += OnSampleCollected;
@@ -439,7 +438,7 @@ namespace XRDataCollector.Editor
                 config.projectName = EditorGUILayout.TextField("项目名称：", config.projectName);
                 config.sceneId = EditorGUILayout.IntField("场景 ID：", config.sceneId);
                 config.uploadUrl = EditorGUILayout.TextField("固定上传地址：", config.uploadUrl);
-                config.authToken = EditorGUILayout.PasswordField("Bearer 令牌：", config.authToken);
+                config.deviceToken = EditorGUILayout.PasswordField("设备令牌：", config.deviceToken);
                 config.username = EditorGUILayout.TextField("用户名：", config.username);
                 config.password = EditorGUILayout.PasswordField("密码：", config.password);
 
@@ -731,18 +730,24 @@ namespace XRDataCollector.Editor
             if (string.IsNullOrEmpty(baseUrl))
                 throw new InvalidOperationException("平台 API 地址为空。");
 
-            string token = config.authToken;
-            if (string.IsNullOrEmpty(token))
+            if (string.IsNullOrEmpty(authToken))
             {
-                token = LoginInEditor(baseUrl, config.username, config.password);
-                config.authToken = token;
+                authToken = DeviceTokenLoginInEditor(baseUrl, config.deviceToken);
             }
 
-            if (string.IsNullOrEmpty(token))
-                throw new InvalidOperationException("登录失败，请检查用户名、密码或令牌。");
+            if (string.IsNullOrEmpty(authToken))
+                throw new InvalidOperationException("设备令牌登录失败，请检查设备令牌。");
 
-            string json = SendEditorRequest("GET", $"{baseUrl}/data-collection/platform/projects?limit=100", null, null, token);
+            string json = SendEditorRequest("GET", $"{baseUrl}/data-collection/platform/projects?limit=100", null, null, authToken);
             return ParseProjectList(json);
+        }
+
+        private string DeviceTokenLoginInEditor(string baseUrl, string deviceToken)
+        {
+            string body = "{\"device_token\":\"" + Uri.EscapeDataString(deviceToken ?? "") + "\"}";
+            string json = SendEditorRequest("POST", $"{baseUrl}/auth/device-token/login",
+                "application/json", body, null);
+            return ExtractStringField(json, "access_token");
         }
 
         private string LoginInEditor(string baseUrl, string username, string password)

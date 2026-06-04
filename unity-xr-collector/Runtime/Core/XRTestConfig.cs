@@ -54,7 +54,7 @@ namespace XRDataCollector.Core
         /// 平台 API 根地址。部署到服务器后通常只需要改这里。
         /// </summary>
         [Tooltip("平台 API 根地址")]
-        public string platformBaseUrl = "http://localhost:8000";
+        public string platformBaseUrl = "http://localhost:8000/api/v1";
 
         /// <summary>
         /// 是否由插件自动在平台创建测试会话。
@@ -78,10 +78,11 @@ namespace XRDataCollector.Core
         public int sceneId = 3;
 
         /// <summary>
-        /// 平台访问令牌。正式部署建议改为设备令牌或项目级采集令牌。
+        /// 设备采集令牌。插件用此令牌向平台换取临时 JWT，无需存储用户名密码。
+        /// 对应后端配置项 DEVICE_TOKEN。
         /// </summary>
-        [Tooltip("平台访问令牌（Bearer Token，可为空）")]
-        public string authToken = "";
+        [Tooltip("设备采集令牌")]
+        public string deviceToken = "xr-device-token-default";
 
         /// <summary>
         /// 本地演示账号。正式部署建议改为采集令牌。

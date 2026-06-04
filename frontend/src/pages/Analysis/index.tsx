@@ -24,16 +24,12 @@ const { TabPane } = Tabs;
 
 const fpsData = [
   { time: '0s', session1: 72, session2: 65, session3: 58 },
-  { time: '30s', session1: 70, session2: 63, session3: 55 },
-  { time: '1m', session1: 71, session2: 64, session3: 57 },
-  { time: '1m30s', session1: 68, session2: 62, session3: 54 },
-  { time: '2m', session1: 72, session2: 66, session3: 59 },
-  { time: '2m30s', session1: 69, session2: 64, session3: 56 },
-  { time: '3m', session1: 71, session2: 65, session3: 58 },
-  { time: '3m30s', session1: 70, session2: 63, session3: 55 },
-  { time: '4m', session1: 72, session2: 67, session3: 60 },
-  { time: '4m30s', session1: 68, session2: 62, session3: 54 },
-  { time: '5m', session1: 71, session2: 65, session3: 57 },
+  { time: '5s', session1: 70, session2: 63, session3: 55 },
+  { time: '10s', session1: 71, session2: 64, session3: 57 },
+  { time: '15s', session1: 68, session2: 62, session3: 54 },
+  { time: '20s', session1: 72, session2: 66, session3: 59 },
+  { time: '25s', session1: 69, session2: 64, session3: 56 },
+  { time: '30s', session1: 71, session2: 65, session3: 58 },
 ];
 
 const frameTimeData = [
@@ -45,17 +41,13 @@ const frameTimeData = [
 ];
 
 const resourceData = [
-  { time: '0s', cpu: 45, gpu: 62, memory: 3.2, vram: 2.1 },
-  { time: '30s', cpu: 48, gpu: 68, memory: 3.4, vram: 2.3 },
-  { time: '1m', cpu: 52, gpu: 72, memory: 3.6, vram: 2.5 },
-  { time: '1m30s', cpu: 50, gpu: 70, memory: 3.5, vram: 2.4 },
-  { time: '2m', cpu: 55, gpu: 75, memory: 3.8, vram: 2.7 },
-  { time: '2m30s', cpu: 53, gpu: 73, memory: 3.7, vram: 2.6 },
-  { time: '3m', cpu: 58, gpu: 78, memory: 4.0, vram: 2.9 },
-  { time: '3m30s', cpu: 56, gpu: 76, memory: 3.9, vram: 2.8 },
-  { time: '4m', cpu: 60, gpu: 80, memory: 4.2, vram: 3.1 },
-  { time: '4m30s', cpu: 57, gpu: 77, memory: 4.0, vram: 2.9 },
-  { time: '5m', cpu: 59, gpu: 79, memory: 4.1, vram: 3.0 },
+  { time: '30s', cpu: 45, gpu: 62, memory: 3.2, vram: 2.1 },
+  { time: '35s', cpu: 48, gpu: 68, memory: 3.4, vram: 2.3 },
+  { time: '40s', cpu: 52, gpu: 72, memory: 3.6, vram: 2.5 },
+  { time: '45s', cpu: 50, gpu: 70, memory: 3.5, vram: 2.4 },
+  { time: '50s', cpu: 55, gpu: 75, memory: 3.8, vram: 2.7 },
+  { time: '55s', cpu: 53, gpu: 73, memory: 3.7, vram: 2.6 },
+  { time: '60s', cpu: 58, gpu: 78, memory: 4.0, vram: 2.9 },
 ];
 
 const comparisonData = [
@@ -182,6 +174,13 @@ const Analysis: React.FC = () => {
     },
   ];
 
+  const fpsChartData = sampleChartData.length
+    ? sampleChartData.filter((d) => d.fps > 0).slice(0, 30)
+    : [];
+  const resourceChartData = sampleChartData.length
+    ? sampleChartData.filter((d) => d.cpu > 0 || d.gpu > 0).slice(-30)
+    : [];
+
   const renderQuality = fullReport?.render_quality_assessment;
   const qualityColumns = [
     {
@@ -282,7 +281,7 @@ const Analysis: React.FC = () => {
         <TabPane tab="FPS趋势" key="fps">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={sampleChartData.length ? sampleChartData : fpsData}>
+              <LineChart data={fpsChartData.length ? fpsChartData : fpsData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis domain={[0, 90]} />
@@ -352,7 +351,7 @@ const Analysis: React.FC = () => {
         <TabPane tab="资源占用" key="resources">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={sampleChartData.length ? sampleChartData : resourceData}>
+              <LineChart data={resourceChartData.length ? resourceChartData : resourceData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis yAxisId="left" domain={[0, 100]} />

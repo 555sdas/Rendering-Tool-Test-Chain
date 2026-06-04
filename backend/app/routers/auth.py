@@ -120,6 +120,38 @@ async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/device-token/login")
+async def device_token_login(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    body = await request.json()
+    device_token = body.get("device_token", "")
+
+    if device_token != settings.DEVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的设备令牌",
+        )
+
+    user = db.query(User).filter(User.username == settings.DEVICE_TOKEN_USERNAME).first()
+    if not user or user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="关联用户不存在或已被禁用",
+        )
+
+    access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
 @router.post("/logout")
 async def logout(
     request: Request,
