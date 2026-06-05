@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space } from 'antd';
-import { useSearchParams } from 'react-router-dom';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space, Descriptions, Button } from 'antd';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   LineChart,
   Line,
@@ -16,6 +16,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { ArrowLeftOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
 import { sessionsApi, type PerformanceSample } from '@/api/sessions';
 
@@ -74,6 +75,7 @@ const fallbackSessionOptions = [
 
 const Analysis: React.FC = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const sessionIdParam = searchParams.get('sessionId');
   const projectIdParam = searchParams.get('projectId');
   const projectId = projectIdParam ? Number(projectIdParam) : undefined;
@@ -236,6 +238,13 @@ const Analysis: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <Space>
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate(-1)}
+          >
+            返回
+          </Button>
           <h2 style={{ margin: 0 }}>性能分析</h2>
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
         </Space>
@@ -413,6 +422,89 @@ const Analysis: React.FC = () => {
               size="middle"
             />
           </Card>
+        </TabPane>
+
+        <TabPane tab="设备信息" key="device-info">
+          {fullReport?.session_info ? (
+            <Card>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="设备概况" bordered size="small" column={1}>
+                    <Descriptions.Item label="设备名称">
+                      {String(fullReport.session_info.config?.device_name || fullReport.session_info.device_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="设备型号">
+                      {String(fullReport.session_info.config?.device_model || fullReport.session_info.device_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="操作系统">
+                      {String(fullReport.session_info.config?.os_version || fullReport.session_info.os_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="屏幕分辨率">
+                      {String(fullReport.session_info.config?.screen_resolution || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="运行环境">
+                      {String(fullReport.session_info.config?.xr_runtime || fullReport.session_info.xr_runtime || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="应用版本">
+                      {String(fullReport.session_info.config?.app_version || fullReport.session_info.app_version || '-')}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="硬件规格" bordered size="small" column={1}>
+                    <Descriptions.Item label="CPU 型号">
+                      {String(fullReport.session_info.config?.cpu_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CPU 核心数">
+                      {String(fullReport.session_info.config?.processor_count || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 型号">
+                      {String(fullReport.session_info.config?.gpu_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 厂商">
+                      {String(fullReport.session_info.config?.gpu_vendor || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 驱动版本">
+                      {String(fullReport.session_info.config?.gpu_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="显存">
+                      {fullReport.session_info.config?.gpu_memory_mb != null
+                        ? `${fullReport.session_info.config.gpu_memory_mb} MB`
+                        : '-'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+              </Row>
+              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="内存与引擎" bordered size="small" column={1}>
+                    <Descriptions.Item label="系统内存">
+                      {fullReport.session_info.config?.system_memory_mb != null
+                        ? `${fullReport.session_info.config.system_memory_mb} MB`
+                        : fullReport.session_info.config?.ram_gb != null
+                          ? `${fullReport.session_info.config.ram_gb} GB`
+                          : '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Unity 版本">
+                      {String(fullReport.session_info.config?.unity_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="XR 设备名称">
+                      {String(fullReport.session_info.config?.xr_device_name || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="样本数">
+                      {String(fullReport.session_info.config?.sample_count ?? '-')}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+              </Row>
+            </Card>
+          ) : (
+            <Card>
+              <div style={{ textAlign: 'center', color: '#8c8c8c', padding: 40 }}>
+                暂无设备信息，请先运行测试采集
+              </div>
+            </Card>
+          )}
         </TabPane>
       </Tabs>
     </div>

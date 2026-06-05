@@ -110,6 +110,20 @@ namespace XRDataCollector.Core
             }
         }
 
+        /// <summary>
+        /// 总采集进度（0~1），用于窗口进度条显示
+        /// </summary>
+        public float CollectionProgress
+        {
+            get
+            {
+                if (!isCollecting) return 0f;
+                float totalDuration = FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds;
+                float elapsed = Time.unscaledTime - collectionStartRealTime;
+                return Mathf.Clamp01(elapsed / totalDuration);
+            }
+        }
+
         #endregion
 
         #region Unity Lifecycle

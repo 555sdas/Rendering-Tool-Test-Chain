@@ -30,9 +30,20 @@ namespace XRDataCollector.Editor
         private readonly List<PlatformProject> platformProjects = new List<PlatformProject>();
         private int selectedProjectIndex = -1;
         private bool isProjectSyncing;
+        private double lastRepaintTime;
+        private readonly List<LogEntry> logEntries = new List<LogEntry>();
+        private Vector2 logScrollPosition;
+        private const int MaxLogEntries = 200;
 
         private const float StatusDisplayDuration = 5f;
         private const string PendingStartAfterPlayModeKey = "XRDataCollector.PendingStartAfterPlayMode";
+
+        private struct LogEntry
+        {
+            public string message;
+            public MessageType type;
+            public string timestamp;
+        }
 
         #endregion
 
@@ -60,6 +71,7 @@ namespace XRDataCollector.Editor
         {
             exportPath = Path.Combine(Application.persistentDataPath, "XRTestData");
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            EditorApplication.update += OnEditorUpdate;
 
             var manager = GetManager();
             if (manager != null)
@@ -81,6 +93,7 @@ namespace XRDataCollector.Editor
         private void OnDisable()
         {
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            EditorApplication.update -= OnEditorUpdate;
 
             var manager = GetManager();
             if (manager != null)
@@ -104,6 +117,14 @@ namespace XRDataCollector.Editor
             }
         }
 
+        private void OnEditorUpdate()
+        {
+            if (!Application.isPlaying) return;
+            if (EditorApplication.timeSinceStartup - lastRepaintTime < 0.5) return;
+            lastRepaintTime = EditorApplication.timeSinceStartup;
+            Repaint();
+        }
+
         #endregion
 
         #region GUI
@@ -112,6 +133,9 @@ namespace XRDataCollector.Editor
         {
             EditorGUILayout.Space(10);
             DrawHeader();
+            EditorGUILayout.Space(5);
+
+            DrawCollectionProgress();
             EditorGUILayout.Space(5);
 
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
@@ -132,6 +156,9 @@ namespace XRDataCollector.Editor
             EditorGUILayout.Space(10);
 
             DrawSettings();
+            EditorGUILayout.Space(10);
+
+            DrawLogArea();
 
             EditorGUILayout.EndScrollView();
 
@@ -141,6 +168,75 @@ namespace XRDataCollector.Editor
         #endregion
 
         #region Draw Methods
+
+        private void DrawCollectionProgress()
+        {
+            var manager = GetManager();
+            if (manager == null || !manager.IsCollecting) return;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("采集进度", EditorStyles.boldLabel);
+
+            float progress = manager.CollectionProgress;
+            Rect rect = EditorGUILayout.GetControlRect(false, 20);
+            EditorGUI.ProgressBar(rect, progress, $"{(progress * 100f):F0}%");
+
+            EditorGUILayout.LabelField($"{manager.CurrentCollectionPhase}剩余：{manager.CurrentPhaseRemainingSeconds:F1} 秒");
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawLogArea()
+        {
+            EditorGUILayout.LabelField("日志", EditorStyles.boldLabel);
+            logScrollPosition = EditorGUILayout.BeginScrollView(logScrollPosition, GUILayout.Height(150));
+
+            foreach (var entry in logEntries)
+            {
+                var style = new GUIStyle(EditorStyles.label)
+                {
+                    normal = { textColor = GetLogColor(entry.type) }
+                };
+                EditorGUILayout.LabelField($"[{entry.timestamp}] {entry.message}", style);
+            }
+
+            if (logEntries.Count == 0)
+            {
+                EditorGUILayout.HelpBox("暂无日志。", MessageType.Info);
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void AddLog(string message, MessageType type)
+        {
+            logEntries.Insert(0, new LogEntry
+            {
+                message = message,
+                type = type,
+                timestamp = DateTime.Now.ToString("HH:mm:ss")
+            });
+
+            if (logEntries.Count > MaxLogEntries)
+            {
+                logEntries.RemoveAt(logEntries.Count - 1);
+            }
+
+            Repaint();
+        }
+
+        private Color GetLogColor(MessageType type)
+        {
+            switch (type)
+            {
+                case MessageType.Error:
+                    return Color.red;
+                case MessageType.Warning:
+                    return Color.yellow;
+                case MessageType.Info:
+                default:
+                    return Color.white;
+            }
+        }
 
         private void DrawHeader()
         {
@@ -205,11 +301,6 @@ namespace XRDataCollector.Editor
 
             if (manager != null)
             {
-                EditorGUILayout.LabelField($"阶段：{manager.CurrentCollectionPhase}");
-                if (manager.IsCollecting)
-                {
-                    EditorGUILayout.LabelField($"剩余时间：{manager.CurrentPhaseRemainingSeconds:F1} 秒");
-                }
                 EditorGUILayout.LabelField($"已采集样本数：{manager.GetSampleCount()}");
             }
 
@@ -512,6 +603,7 @@ namespace XRDataCollector.Editor
             var manager = GetManager();
             if (manager == null) return;
             manager.StopCollection();
+            AddLog("手动停止采集", MessageType.Info);
         }
 
         private void ExportData(ExportFormat format)
@@ -570,6 +662,7 @@ namespace XRDataCollector.Editor
                 return;
             }
 
+            AddLog("正在上传数据到平台...", MessageType.Info);
             manager.UploadData("");
         }
 
@@ -629,44 +722,59 @@ namespace XRDataCollector.Editor
 
         private void OnSampleCollected(PerformanceSample sample)
         {
+            var manager = GetManager();
+            int count = manager != null ? manager.GetSampleCount() : 0;
+            if (count % 10 == 0)
+                AddLog($"已采集 {count} 个样本", MessageType.Info);
             Repaint();
         }
 
         private void OnSessionStarted()
         {
-            ShowStatus("会话已开始。", MessageType.Info);
+            AddLog("采集会话已开始（前30秒：帧率采集，后30秒：指标采集）", MessageType.Info);
             Repaint();
         }
 
         private void OnSessionStopped()
         {
-            ShowStatus("会话已停止。", MessageType.Info);
+            var manager = GetManager();
+            int count = manager != null ? manager.GetSampleCount() : 0;
+            AddLog($"采集会话已停止，共采集 {count} 个样本", MessageType.Info);
             Repaint();
         }
 
         private void OnDataExported(string path)
         {
-            ShowStatus($"数据已导出至：{path}", MessageType.Info);
+            AddLog($"数据已导出至：{path}", MessageType.Info);
             Repaint();
         }
 
         private void OnDataUploaded(bool success)
         {
             if (success)
-                ShowStatus("数据上传成功。", MessageType.Info);
+                AddLog("数据上传成功", MessageType.Info);
             else
-                ShowStatus("数据上传失败。", MessageType.Error);
+                AddLog("数据上传失败", MessageType.Error);
             Repaint();
         }
 
         private void OnPlatformSessionCreated(int sessionId)
         {
-            ShowStatus($"平台会话 {sessionId} 已创建。", MessageType.Info);
+            AddLog($"平台会话 {sessionId} 已创建", MessageType.Info);
             Repaint();
         }
 
         private void OnPlayModeStateChanged(PlayModeStateChange state)
         {
+            if (state == PlayModeStateChange.EnteredPlayMode)
+            {
+                AddLog("进入运行模式", MessageType.Info);
+            }
+            else if (state == PlayModeStateChange.ExitingPlayMode)
+            {
+                AddLog("退出运行模式", MessageType.Info);
+            }
+
             if (state != PlayModeStateChange.EnteredPlayMode) return;
             if (!SessionState.GetBool(PendingStartAfterPlayModeKey, false)) return;
 
@@ -694,6 +802,8 @@ namespace XRDataCollector.Editor
             statusMessage = message;
             statusType = type;
             statusClearTime = Time.realtimeSinceStartup + StatusDisplayDuration;
+            AddLog(message, type);
+            Repaint();
         }
 
         private void SyncSelectedProjectIndex(XRTestConfig config)
