@@ -103,6 +103,7 @@ export interface FullReport {
     os_version: string | null;
     xr_runtime: string | null;
     app_version: string | null;
+    config: Record<string, unknown> | null;
     started_at: string | null;
     ended_at: string | null;
     duration_seconds: number | null;

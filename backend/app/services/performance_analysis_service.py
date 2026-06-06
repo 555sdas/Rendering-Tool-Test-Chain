@@ -234,6 +234,7 @@ class PerformanceAnalysisService:
                 "os_version": session.os_version,
                 "xr_runtime": session.xr_runtime,
                 "app_version": session.app_version,
+                "config": session.config,
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "ended_at": session.ended_at.isoformat() if session.ended_at else None,
                 "duration_seconds": session.duration_seconds,

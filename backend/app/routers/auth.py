@@ -76,6 +76,19 @@ async def login(
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role.value,
+            "status": user.status.value,
+            "login_attempts": user.login_attempts,
+            "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        },
     }
 
 
@@ -102,6 +115,38 @@ async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     return {
         "access_token": access_token,
         "refresh_token": new_refresh_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
+@router.post("/device-token/login")
+async def device_token_login(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    body = await request.json()
+    device_token = body.get("device_token", "")
+
+    if device_token != settings.DEVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的设备令牌",
+        )
+
+    user = db.query(User).filter(User.username == settings.DEVICE_TOKEN_USERNAME).first()
+    if not user or user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="关联用户不存在或已被禁用",
+        )
+
+    access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     }

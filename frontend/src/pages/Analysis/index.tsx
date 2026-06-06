@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space } from 'antd';
-import { useSearchParams } from 'react-router-dom';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space, Descriptions, Button } from 'antd';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   LineChart,
   Line,
@@ -16,6 +16,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { ArrowLeftOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
 import { sessionsApi, type PerformanceSample } from '@/api/sessions';
 
@@ -24,16 +25,12 @@ const { TabPane } = Tabs;
 
 const fpsData = [
   { time: '0s', session1: 72, session2: 65, session3: 58 },
-  { time: '30s', session1: 70, session2: 63, session3: 55 },
-  { time: '1m', session1: 71, session2: 64, session3: 57 },
-  { time: '1m30s', session1: 68, session2: 62, session3: 54 },
-  { time: '2m', session1: 72, session2: 66, session3: 59 },
-  { time: '2m30s', session1: 69, session2: 64, session3: 56 },
-  { time: '3m', session1: 71, session2: 65, session3: 58 },
-  { time: '3m30s', session1: 70, session2: 63, session3: 55 },
-  { time: '4m', session1: 72, session2: 67, session3: 60 },
-  { time: '4m30s', session1: 68, session2: 62, session3: 54 },
-  { time: '5m', session1: 71, session2: 65, session3: 57 },
+  { time: '5s', session1: 70, session2: 63, session3: 55 },
+  { time: '10s', session1: 71, session2: 64, session3: 57 },
+  { time: '15s', session1: 68, session2: 62, session3: 54 },
+  { time: '20s', session1: 72, session2: 66, session3: 59 },
+  { time: '25s', session1: 69, session2: 64, session3: 56 },
+  { time: '30s', session1: 71, session2: 65, session3: 58 },
 ];
 
 const frameTimeData = [
@@ -45,17 +42,13 @@ const frameTimeData = [
 ];
 
 const resourceData = [
-  { time: '0s', cpu: 45, gpu: 62, memory: 3.2, vram: 2.1 },
-  { time: '30s', cpu: 48, gpu: 68, memory: 3.4, vram: 2.3 },
-  { time: '1m', cpu: 52, gpu: 72, memory: 3.6, vram: 2.5 },
-  { time: '1m30s', cpu: 50, gpu: 70, memory: 3.5, vram: 2.4 },
-  { time: '2m', cpu: 55, gpu: 75, memory: 3.8, vram: 2.7 },
-  { time: '2m30s', cpu: 53, gpu: 73, memory: 3.7, vram: 2.6 },
-  { time: '3m', cpu: 58, gpu: 78, memory: 4.0, vram: 2.9 },
-  { time: '3m30s', cpu: 56, gpu: 76, memory: 3.9, vram: 2.8 },
-  { time: '4m', cpu: 60, gpu: 80, memory: 4.2, vram: 3.1 },
-  { time: '4m30s', cpu: 57, gpu: 77, memory: 4.0, vram: 2.9 },
-  { time: '5m', cpu: 59, gpu: 79, memory: 4.1, vram: 3.0 },
+  { time: '30s', cpu: 45, gpu: 62, memory: 3.2, vram: 2.1 },
+  { time: '35s', cpu: 48, gpu: 68, memory: 3.4, vram: 2.3 },
+  { time: '40s', cpu: 52, gpu: 72, memory: 3.6, vram: 2.5 },
+  { time: '45s', cpu: 50, gpu: 70, memory: 3.5, vram: 2.4 },
+  { time: '50s', cpu: 55, gpu: 75, memory: 3.8, vram: 2.7 },
+  { time: '55s', cpu: 53, gpu: 73, memory: 3.7, vram: 2.6 },
+  { time: '60s', cpu: 58, gpu: 78, memory: 4.0, vram: 2.9 },
 ];
 
 const comparisonData = [
@@ -82,6 +75,7 @@ const fallbackSessionOptions = [
 
 const Analysis: React.FC = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const sessionIdParam = searchParams.get('sessionId');
   const projectIdParam = searchParams.get('projectId');
   const projectId = projectIdParam ? Number(projectIdParam) : undefined;
@@ -182,6 +176,13 @@ const Analysis: React.FC = () => {
     },
   ];
 
+  const fpsChartData = sampleChartData.length
+    ? sampleChartData.filter((d) => d.fps > 0).slice(0, 30)
+    : [];
+  const resourceChartData = sampleChartData.length
+    ? sampleChartData.filter((d) => d.cpu > 0 || d.gpu > 0).slice(-30)
+    : [];
+
   const renderQuality = fullReport?.render_quality_assessment;
   const qualityColumns = [
     {
@@ -237,6 +238,13 @@ const Analysis: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <Space>
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate(-1)}
+          >
+            返回
+          </Button>
           <h2 style={{ margin: 0 }}>性能分析</h2>
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
         </Space>
@@ -282,7 +290,7 @@ const Analysis: React.FC = () => {
         <TabPane tab="FPS趋势" key="fps">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={sampleChartData.length ? sampleChartData : fpsData}>
+              <LineChart data={fpsChartData.length ? fpsChartData : fpsData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis domain={[0, 90]} />
@@ -352,7 +360,7 @@ const Analysis: React.FC = () => {
         <TabPane tab="资源占用" key="resources">
           <Card>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={sampleChartData.length ? sampleChartData : resourceData}>
+              <LineChart data={resourceChartData.length ? resourceChartData : resourceData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis yAxisId="left" domain={[0, 100]} />
@@ -414,6 +422,89 @@ const Analysis: React.FC = () => {
               size="middle"
             />
           </Card>
+        </TabPane>
+
+        <TabPane tab="设备信息" key="device-info">
+          {fullReport?.session_info ? (
+            <Card>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="设备概况" bordered size="small" column={1}>
+                    <Descriptions.Item label="设备名称">
+                      {String(fullReport.session_info.config?.device_name || fullReport.session_info.device_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="设备型号">
+                      {String(fullReport.session_info.config?.device_model || fullReport.session_info.device_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="操作系统">
+                      {String(fullReport.session_info.config?.os_version || fullReport.session_info.os_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="屏幕分辨率">
+                      {String(fullReport.session_info.config?.screen_resolution || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="运行环境">
+                      {String(fullReport.session_info.config?.xr_runtime || fullReport.session_info.xr_runtime || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="应用版本">
+                      {String(fullReport.session_info.config?.app_version || fullReport.session_info.app_version || '-')}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="硬件规格" bordered size="small" column={1}>
+                    <Descriptions.Item label="CPU 型号">
+                      {String(fullReport.session_info.config?.cpu_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CPU 核心数">
+                      {String(fullReport.session_info.config?.processor_count || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 型号">
+                      {String(fullReport.session_info.config?.gpu_model || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 厂商">
+                      {String(fullReport.session_info.config?.gpu_vendor || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 驱动版本">
+                      {String(fullReport.session_info.config?.gpu_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="显存">
+                      {fullReport.session_info.config?.gpu_memory_mb != null
+                        ? `${fullReport.session_info.config.gpu_memory_mb} MB`
+                        : '-'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+              </Row>
+              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                <Col xs={24} sm={12}>
+                  <Descriptions title="内存与引擎" bordered size="small" column={1}>
+                    <Descriptions.Item label="系统内存">
+                      {fullReport.session_info.config?.system_memory_mb != null
+                        ? `${fullReport.session_info.config.system_memory_mb} MB`
+                        : fullReport.session_info.config?.ram_gb != null
+                          ? `${fullReport.session_info.config.ram_gb} GB`
+                          : '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Unity 版本">
+                      {String(fullReport.session_info.config?.unity_version || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="XR 设备名称">
+                      {String(fullReport.session_info.config?.xr_device_name || '-')}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="样本数">
+                      {String(fullReport.session_info.config?.sample_count ?? '-')}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+              </Row>
+            </Card>
+          ) : (
+            <Card>
+              <div style={{ textAlign: 'center', color: '#8c8c8c', padding: 40 }}>
+                暂无设备信息，请先运行测试采集
+              </div>
+            </Card>
+          )}
         </TabPane>
       </Tabs>
     </div>

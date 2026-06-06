@@ -27,22 +27,18 @@ namespace XRDataCollector.Network
         /// <summary>
         /// 异步上传测试数据
         /// </summary>
-        /// <param name="samples">性能样本列表</param>
-        /// <param name="session">测试会话信息</param>
-        /// <param name="url">上传目标地址</param>
-        /// <param name="callback">上传完成回调，参数为是否成功</param>
         public void UploadAsync(List<PerformanceSample> samples, XRTestSession session, string url, string authToken, Action<bool> callback)
         {
             if (samples == null || samples.Count == 0)
             {
-                Debug.LogWarning("[TestDataUploader] No samples to upload.");
+                Debug.LogWarning("[TestDataUploader] 没有可上传的样本。");
                 callback?.Invoke(false);
                 return;
             }
 
             if (string.IsNullOrEmpty(url))
             {
-                Debug.LogError("[TestDataUploader] Upload URL is empty.");
+                Debug.LogError("[TestDataUploader] 上传地址为空。");
                 callback?.Invoke(false);
                 return;
             }
@@ -50,7 +46,7 @@ namespace XRDataCollector.Network
             var host = GetCoroutineHost();
             if (host == null)
             {
-                Debug.LogError("[TestDataUploader] Cannot find a MonoBehaviour to run coroutine.");
+                Debug.LogError("[TestDataUploader] 找不到 MonoBehaviour 来运行协程。");
                 callback?.Invoke(false);
                 return;
             }
@@ -63,14 +59,14 @@ namespace XRDataCollector.Network
         {
             if (samples == null || samples.Count == 0)
             {
-                Debug.LogWarning("[TestDataUploader] No samples to upload.");
+                Debug.LogWarning("[TestDataUploader] 没有可上传的样本。");
                 callback?.Invoke(false);
                 return;
             }
 
             if (config == null)
             {
-                Debug.LogError("[TestDataUploader] XRTestConfig is null.");
+                Debug.LogError("[TestDataUploader] XRTestConfig 为空。");
                 callback?.Invoke(false);
                 return;
             }
@@ -78,7 +74,7 @@ namespace XRDataCollector.Network
             var host = GetCoroutineHost();
             if (host == null)
             {
-                Debug.LogError("[TestDataUploader] Cannot find a MonoBehaviour to run coroutine.");
+                Debug.LogError("[TestDataUploader] 找不到 MonoBehaviour 来运行协程。");
                 callback?.Invoke(false);
                 return;
             }
@@ -90,14 +86,14 @@ namespace XRDataCollector.Network
         {
             if (config == null)
             {
-                callback?.Invoke(null, "XRTestConfig is null.");
+                callback?.Invoke(null, "XRTestConfig 为空。");
                 return;
             }
 
             var host = GetCoroutineHost();
             if (host == null)
             {
-                callback?.Invoke(null, "Cannot find a MonoBehaviour to run coroutine.");
+                callback?.Invoke(null, "找不到 MonoBehaviour 来运行协程。");
                 return;
             }
 
@@ -108,20 +104,20 @@ namespace XRDataCollector.Network
         {
             if (config == null)
             {
-                callback?.Invoke(0, 0, null, "XRTestConfig is null.");
+                callback?.Invoke(0, 0, null, "XRTestConfig 为空。");
                 return;
             }
 
             if (session == null)
             {
-                callback?.Invoke(0, 0, null, "XRTestSession is null.");
+                callback?.Invoke(0, 0, null, "XRTestSession 为空。");
                 return;
             }
 
             var host = GetCoroutineHost();
             if (host == null)
             {
-                callback?.Invoke(0, 0, null, "Cannot find a MonoBehaviour to run coroutine.");
+                callback?.Invoke(0, 0, null, "找不到 MonoBehaviour 来运行协程。");
                 return;
             }
 
@@ -135,7 +131,6 @@ namespace XRDataCollector.Network
         private MonoBehaviour GetCoroutineHost()
         {
             if (coroutineHost != null) return coroutineHost;
-
             if (XRTestManager.Instance != null)
             {
                 coroutineHost = XRTestManager.Instance;
@@ -157,30 +152,26 @@ namespace XRDataCollector.Network
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
                 if (!string.IsNullOrEmpty(authToken))
-                {
                     request.SetRequestHeader("Authorization", "Bearer " + authToken);
-                }
                 request.timeout = 30;
 
                 yield return request.SendWebRequest();
 
                 bool success = false;
-
 #if UNITY_2020_1_OR_NEWER
                 if (request.result == UnityWebRequest.Result.Success)
 #else
                 if (!request.isNetworkError && !request.isHttpError)
 #endif
                 {
-                    Debug.Log($"[TestDataUploader] Upload successful. Response: {request.downloadHandler.text}");
+                    Debug.Log($"[TestDataUploader] 上传成功。响应：{request.downloadHandler.text}");
                     success = true;
                 }
                 else
                 {
-                    Debug.LogError($"[TestDataUploader] Upload failed: {request.error}");
+                    Debug.LogError($"[TestDataUploader] 上传失败：{request.error}");
                     success = false;
                 }
-
                 callback?.Invoke(success);
             }
         }
@@ -190,7 +181,7 @@ namespace XRDataCollector.Network
             string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
-                callback?.Invoke(null, "Platform base URL is empty.");
+                callback?.Invoke(null, "平台 API 地址为空。");
                 yield break;
             }
 
@@ -198,7 +189,7 @@ namespace XRDataCollector.Network
             yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
             if (string.IsNullOrEmpty(token))
             {
-                callback?.Invoke(null, "Login failed. Check username, password, or token.");
+                callback?.Invoke(null, "登录失败，请检查用户名、密码或令牌。");
                 yield break;
             }
 
@@ -207,7 +198,6 @@ namespace XRDataCollector.Network
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Authorization", "Bearer " + token);
                 request.timeout = 30;
-
                 yield return request.SendWebRequest();
 
 #if UNITY_2020_1_OR_NEWER
@@ -217,7 +207,7 @@ namespace XRDataCollector.Network
 #endif
                 if (!success)
                 {
-                    callback?.Invoke(null, $"Load projects failed: {request.error} {request.downloadHandler.text}");
+                    callback?.Invoke(null, $"加载项目列表失败：{request.error} {request.downloadHandler.text}");
                     yield break;
                 }
 
@@ -227,14 +217,13 @@ namespace XRDataCollector.Network
         }
 
         private IEnumerator CreatePlatformSessionFlowCoroutine(
-            XRTestConfig config,
-            XRTestSession session,
+            XRTestConfig config, XRTestSession session,
             Action<int, int, string, string> callback)
         {
             string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
-                callback?.Invoke(0, 0, null, "Platform base URL is empty.");
+                callback?.Invoke(0, 0, null, "平台 API 地址为空。");
                 yield break;
             }
 
@@ -242,7 +231,7 @@ namespace XRDataCollector.Network
             yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
             if (string.IsNullOrEmpty(token))
             {
-                callback?.Invoke(0, 0, null, "Login failed. Check username, password, or token.");
+                callback?.Invoke(0, 0, null, "登录失败，请检查用户名、密码或令牌。");
                 yield break;
             }
 
@@ -254,7 +243,7 @@ namespace XRDataCollector.Network
             string baseUrl = NormalizeBaseUrl(config.platformBaseUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
-                Debug.LogError("[TestDataUploader] Platform base URL is empty.");
+                Debug.LogError("[TestDataUploader] 平台 API 地址为空。");
                 callback?.Invoke(false);
                 yield break;
             }
@@ -263,7 +252,7 @@ namespace XRDataCollector.Network
             yield return EnsureAuthTokenCoroutine(config, baseUrl, value => token = value);
             if (string.IsNullOrEmpty(token))
             {
-                Debug.LogError("[TestDataUploader] Cannot upload without token.");
+                Debug.LogError("[TestDataUploader] 无法上传：缺少令牌。");
                 callback?.Invoke(false);
                 yield break;
             }
@@ -274,14 +263,10 @@ namespace XRDataCollector.Network
                 int sessionId = session != null ? session.PlatformSessionId : 0;
                 if (sessionId <= 0)
                 {
-                    int runIndex = 0;
+                    int runIndex = 0;  
                     string platformName = null;
                     string error = null;
-                    yield return CreatePlatformSessionCoroutine(
-                        baseUrl,
-                        token,
-                        config,
-                        session,
+                    yield return CreatePlatformSessionCoroutine(baseUrl, token, config, session,
                         (id, index, name, message) =>
                         {
                             sessionId = id;
@@ -291,14 +276,10 @@ namespace XRDataCollector.Network
                         });
 
                     if (sessionId > 0 && session != null)
-                    {
                         session.BindPlatformSession(sessionId, runIndex, platformName);
-                    }
 
                     if (!string.IsNullOrEmpty(error))
-                    {
-                        Debug.LogError($"[TestDataUploader] Create platform session failed: {error}");
-                    }
+                        Debug.LogError($"[TestDataUploader] 创建平台会话失败：{error}");
                 }
 
                 if (sessionId <= 0)
@@ -310,7 +291,7 @@ namespace XRDataCollector.Network
             }
             else if (string.IsNullOrEmpty(uploadUrl))
             {
-                Debug.LogError("[TestDataUploader] Upload URL is empty and Auto Create Session is disabled.");
+                Debug.LogError("[TestDataUploader] 上传地址为空且未启用自动创建会话。");
                 callback?.Invoke(false);
                 yield break;
             }
@@ -331,7 +312,6 @@ namespace XRDataCollector.Network
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded");
                 request.timeout = 30;
-
                 yield return request.SendWebRequest();
 
 #if UNITY_2020_1_OR_NEWER
@@ -341,35 +321,65 @@ namespace XRDataCollector.Network
 #endif
                 if (!success)
                 {
-                    Debug.LogError($"[TestDataUploader] Login failed: {request.error} {request.downloadHandler.text}");
+                    Debug.LogError($"[TestDataUploader] 登录失败：{request.error} {request.downloadHandler.text}");
                     callback?.Invoke(null);
                     yield break;
                 }
+                callback?.Invoke(ExtractStringField(request.downloadHandler.text, "access_token"));
+            }
+        }
 
+        private IEnumerator DeviceTokenLoginCoroutine(string baseUrl, string deviceToken, Action<string> callback)
+        {
+            string body = "{\"device_token\":\"" + UnityWebRequest.EscapeURL(deviceToken ?? "") + "\"}";
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
+
+            using (var request = new UnityWebRequest($"{baseUrl}/auth/device-token/login", "POST"))
+            {
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+                request.timeout = 30;
+                yield return request.SendWebRequest();
+
+#if UNITY_2020_1_OR_NEWER
+                bool success = request.result == UnityWebRequest.Result.Success;
+#else
+                bool success = !request.isNetworkError && !request.isHttpError;
+#endif
+                if (!success)
+                {
+                    Debug.LogError($"[TestDataUploader] 设备令牌登录失败：{request.error} {request.downloadHandler.text}");
+                    callback?.Invoke(null);
+                    yield break;
+                }
                 callback?.Invoke(ExtractStringField(request.downloadHandler.text, "access_token"));
             }
         }
 
         private IEnumerator EnsureAuthTokenCoroutine(XRTestConfig config, string baseUrl, Action<string> callback)
         {
-            string token = config.authToken;
-            if (string.IsNullOrEmpty(token))
+            string token = null;
+
+            // 优先使用设备令牌登录
+            if (!string.IsNullOrEmpty(config.deviceToken))
             {
-                yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
+                yield return DeviceTokenLoginCoroutine(baseUrl, config.deviceToken, value => token = value);
                 if (!string.IsNullOrEmpty(token))
                 {
-                    config.authToken = token;
+                    callback?.Invoke(token);
+                    yield break;
                 }
+                Debug.LogWarning("[TestDataUploader] 设备令牌登录失败，回退到用户名密码登录。");
             }
 
+            // 回退到用户名密码登录
+            yield return LoginCoroutine(baseUrl, config.username, config.password, value => token = value);
             callback?.Invoke(token);
         }
 
         private IEnumerator CreatePlatformSessionCoroutine(
-            string baseUrl,
-            string token,
-            XRTestConfig config,
-            XRTestSession session,
+            string baseUrl, string token, XRTestConfig config, XRTestSession session,
             Action<int, int, string, string> callback)
         {
             string body = BuildCreateSessionJson(config, session);
@@ -382,7 +392,6 @@ namespace XRDataCollector.Network
                 request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
                 request.SetRequestHeader("Authorization", "Bearer " + token);
                 request.timeout = 30;
-
                 yield return request.SendWebRequest();
 
 #if UNITY_2020_1_OR_NEWER
@@ -474,7 +483,6 @@ namespace XRDataCollector.Network
 
             sb.AppendLine("  ]");
             sb.AppendLine("}");
-
             return sb.ToString();
         }
 
@@ -485,7 +493,6 @@ namespace XRDataCollector.Network
                 sb.AppendLine("      \"deviceInfo\": null,");
                 return;
             }
-
             sb.AppendLine("      \"deviceInfo\": {");
             sb.AppendLine($"        \"deviceModel\": \"{EscapeJson(info.deviceModel)}\",");
             sb.AppendLine($"        \"deviceName\": \"{EscapeJson(info.deviceName)}\",");
@@ -503,74 +510,22 @@ namespace XRDataCollector.Network
 
         private string BuildCreateSessionJson(XRTestConfig config, XRTestSession session)
         {
-            string prefix = string.IsNullOrEmpty(config.sessionName)
-                ? (string.IsNullOrEmpty(config.projectName) ? "Unity Test" : config.projectName + " Unity Test")
-                : config.sessionName;
-            string deviceModel = SystemInfo.deviceModel;
-            string osVersion = SystemInfo.operatingSystem;
-            string appVersion = session != null ? session.AppVersion : Application.version;
-            string unityVersion = session != null ? session.UnityVersion : Application.unityVersion;
-            string screenResolution = $"{Screen.width}x{Screen.height}";
-
             var sb = new StringBuilder();
             sb.AppendLine("{");
             sb.AppendLine($"  \"project_id\": {config.projectId},");
-            sb.AppendLine($"  \"session_name_prefix\": \"{EscapeJson(prefix)}\",");
-            sb.AppendLine("  \"description\": \"Unity plugin auto-created session\",");
-            sb.AppendLine($"  \"device_model\": \"{EscapeJson(deviceModel)}\",");
-            sb.AppendLine($"  \"os_version\": \"{EscapeJson(osVersion)}\",");
-            sb.AppendLine("  \"xr_runtime\": \"Unity Editor / OpenXR\",");
-            sb.AppendLine($"  \"app_version\": \"{EscapeJson(appVersion)}\",");
             if (config.sceneId > 0)
-            {
                 sb.AppendLine($"  \"scene_id\": {config.sceneId},");
-            }
-            else
-            {
-                sb.AppendLine("  \"scene_id\": null,");
-            }
-            sb.AppendLine("  \"config\": {");
-            sb.AppendLine($"    \"unity_version\": \"{EscapeJson(unityVersion)}\",");
-            sb.AppendLine($"    \"project_name\": \"{EscapeJson(config.projectName)}\",");
-            sb.AppendLine($"    \"gpu_model\": \"{EscapeJson(SystemInfo.graphicsDeviceName)}\",");
-            sb.AppendLine($"    \"gpu_vendor\": \"{EscapeJson(SystemInfo.graphicsDeviceVendor)}\",");
-            sb.AppendLine($"    \"gpu_version\": \"{EscapeJson(SystemInfo.graphicsDeviceVersion)}\",");
-            sb.AppendLine($"    \"cpu_model\": \"{EscapeJson(SystemInfo.processorType)}\",");
-            sb.AppendLine($"    \"processor_count\": {SystemInfo.processorCount},");
-            sb.AppendLine($"    \"system_memory_mb\": {SystemInfo.systemMemorySize},");
-            sb.AppendLine($"    \"gpu_memory_mb\": {SystemInfo.graphicsMemorySize},");
-            sb.AppendLine($"    \"screen_resolution\": \"{EscapeJson(screenResolution)}\",");
-            sb.AppendLine("    \"sync_mode\": \"unity_auto_sync\"");
-            sb.AppendLine("  }");
+            sb.AppendLine($"  \"session_name_prefix\": \"{EscapeJson(session?.SessionName ?? config.sessionName)}\",");
+            sb.AppendLine($"  \"description\": \"Unity auto-created session for project {config.projectId}\"");
             sb.AppendLine("}");
             return sb.ToString();
         }
 
-        private List<PlatformProject> ParseProjectList(string json)
-        {
-            if (string.IsNullOrEmpty(json))
-            {
-                return new List<PlatformProject>();
-            }
-
-            try
-            {
-                var response = JsonUtility.FromJson<PlatformProjectListResponse>(json);
-                return response != null && response.items != null
-                    ? response.items
-                    : new List<PlatformProject>();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[TestDataUploader] Parse project list failed: {e.Message}");
-                return new List<PlatformProject>();
-            }
-        }
-
-        private string NormalizeBaseUrl(string value)
+        private string EscapeJson(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";
-            return value.Trim().TrimEnd('/');
+            return value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                        .Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
         }
 
         private string ExtractStringField(string json, string field)
@@ -582,42 +537,41 @@ namespace XRDataCollector.Network
         private int ExtractIntField(string json, string field)
         {
             var match = Regex.Match(json, $"\"{field}\"\\s*:\\s*(\\d+)");
-            if (match.Success && int.TryParse(match.Groups[1].Value, out int value))
+            return match.Success ? int.Parse(match.Groups[1].Value) : 0;
+        }
+
+        private List<PlatformProject> ParseProjectList(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+                return new List<PlatformProject>();
+            try
             {
-                return value;
+                var response = JsonUtility.FromJson<PlatformProjectListResponse>(json);
+                return response != null && response.items != null
+                    ? response.items
+                    : new List<PlatformProject>();
             }
-            return 0;
-        }
-
-        private string EscapeJson(string value)
-        {
-            if (string.IsNullOrEmpty(value))
-                return string.Empty;
-
-            return value
-                .Replace("\\", "\\\\")
-                .Replace("\"", "\\\"")
-                .Replace("\n", "\\n")
-                .Replace("\r", "\\r")
-                .Replace("\t", "\\t");
-        }
-
-        #endregion
-
-        #region Nested Class
-
-        /// <summary>
-        /// 用于运行协程的内部 MonoBehaviour
-        /// </summary>
-        private class UploaderHost : MonoBehaviour
-        {
-            private void Awake()
+            catch (Exception e)
             {
-                DontDestroyOnLoad(gameObject);
-                hideFlags = HideFlags.HideAndDontSave;
+                Debug.LogError($"[TestDataUploader] 解析项目列表失败：{e.Message}");
+                return new List<PlatformProject>();
             }
         }
 
+        private string NormalizeBaseUrl(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Trim().TrimEnd('/');
+        }
+
         #endregion
+    }
+
+    internal class UploaderHost : MonoBehaviour
+    {
+        private void Awake()
+        {
+            DontDestroyOnLoad(gameObject);
+        }
     }
 }

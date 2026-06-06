@@ -2,6 +2,23 @@ import { create } from 'zustand';
 import { authApi } from '@/api/auth';
 import { LoginRequest, UserInfo } from '@/types';
 
+function loadAuthFromStorage(): { token: string | null; user: UserInfo | null } {
+  const token = localStorage.getItem('xr_token');
+  const userStr = localStorage.getItem('xr_user');
+  if (token && userStr) {
+    try {
+      return { token, user: JSON.parse(userStr) as UserInfo };
+    } catch {
+      localStorage.removeItem('xr_token');
+      localStorage.removeItem('xr_user');
+      localStorage.removeItem('xr_refresh_token');
+    }
+  }
+  return { token: null, user: null };
+}
+
+const { token: savedToken, user: savedUser } = loadAuthFromStorage();
+
 interface AuthState {
   token: string | null;
   user: UserInfo | null;
@@ -10,14 +27,14 @@ interface AuthState {
   error: string | null;
   login: (credentials: LoginRequest) => Promise<void>;
   logout: () => Promise<void>;
+  refreshAuth: () => Promise<boolean>;
   setUser: (user: UserInfo) => void;
-  initialize: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  isAuthenticated: false,
+export const useAuthStore = create<AuthState>((set, get) => ({
+  token: savedToken,
+  user: savedUser,
+  isAuthenticated: savedToken !== null,
   isLoading: false,
   error: null,
 
@@ -26,6 +43,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const response = await authApi.login(credentials);
       localStorage.setItem('xr_token', response.access_token);
+      localStorage.setItem('xr_refresh_token', response.refresh_token);
       localStorage.setItem('xr_user', JSON.stringify(response.user));
       set({
         token: response.access_token,
@@ -47,25 +65,36 @@ export const useAuthStore = create<AuthState>((set) => ({
       // ignore logout errors
     }
     localStorage.removeItem('xr_token');
+    localStorage.removeItem('xr_refresh_token');
     localStorage.removeItem('xr_user');
     set({ token: null, user: null, isAuthenticated: false, error: null });
   },
 
-  setUser: (user: UserInfo) => {
-    set({ user });
+  refreshAuth: async (): Promise<boolean> => {
+    const refreshToken = localStorage.getItem('xr_refresh_token');
+    if (!refreshToken) return false;
+
+    try {
+      const response = await authApi.refreshToken();
+      localStorage.setItem('xr_token', response.access_token);
+      localStorage.setItem('xr_refresh_token', response.refresh_token);
+      if (response.user) {
+        localStorage.setItem('xr_user', JSON.stringify(response.user));
+      }
+      set({
+        token: response.access_token,
+        user: response.user || get().user,
+        isAuthenticated: true,
+        error: null,
+      });
+      return true;
+    } catch {
+      // 刷新失败，保持当前状态（由调用方决定是否 logout）
+      return false;
+    }
   },
 
-  initialize: () => {
-    const token = localStorage.getItem('xr_token');
-    const userStr = localStorage.getItem('xr_user');
-    if (token && userStr) {
-      try {
-        const user = JSON.parse(userStr) as UserInfo;
-        set({ token, user, isAuthenticated: true });
-      } catch {
-        localStorage.removeItem('xr_token');
-        localStorage.removeItem('xr_user');
-      }
-    }
+  setUser: (user: UserInfo) => {
+    set({ user });
   },
 }));

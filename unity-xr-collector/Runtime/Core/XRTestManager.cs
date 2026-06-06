@@ -8,10 +8,6 @@ using XRDataCollector.Network;
 
 namespace XRDataCollector.Core
 {
-    /// <summary>
-    /// XR 测试数据管理器主类
-    /// 负责协调所有采集器、管理测试会话、处理数据导出和上传
-    /// </summary>
     public class XRTestManager : MonoBehaviour
     {
         #region Singleton
@@ -22,31 +18,11 @@ namespace XRDataCollector.Core
 
         #region Events
 
-        /// <summary>
-        /// 当新的性能样本采集完成时触发
-        /// </summary>
         public event Action<PerformanceSample> OnSampleCollected;
-
-        /// <summary>
-        /// 当测试会话开始时触发
-        /// </summary>
         public event Action OnSessionStarted;
-
-        /// <summary>
-        /// 当测试会话停止时触发
-        /// </summary>
         public event Action OnSessionStopped;
-
-        /// <summary>
-        /// 当数据导出完成时触发
-        /// </summary>
         public event Action<string> OnDataExported;
-
-        /// <summary>
-        /// 当数据上传完成时触发，参数为是否成功
-        /// </summary>
         public event Action<bool> OnDataUploaded;
-
         public event Action<int> OnPlatformSessionCreated;
 
         #endregion
@@ -90,14 +66,8 @@ namespace XRDataCollector.Core
 
         #region Properties
 
-        /// <summary>
-        /// 当前是否正在采集数据
-        /// </summary>
         public bool IsCollecting => isCollecting;
 
-        /// <summary>
-        /// 当前配置
-        /// </summary>
         public XRTestConfig Config
         {
             get
@@ -107,16 +77,9 @@ namespace XRDataCollector.Core
             }
         }
 
-        /// <summary>
-        /// 当前会话信息
-        /// </summary>
         public XRTestSession Session => session;
-
         public int PlatformSessionId => session != null ? session.PlatformSessionId : 0;
 
-        /// <summary>
-        /// 当前采集阶段
-        /// </summary>
         public string CurrentCollectionPhase
         {
             get
@@ -124,36 +87,40 @@ namespace XRDataCollector.Core
                 switch (currentPhase)
                 {
                     case CollectionPhase.FrameRate:
-                        return "Frame Rate (0-30s)";
+                        return "帧率采集 (0-30秒)";
                     case CollectionPhase.Metrics:
-                        return "Metrics (30-60s)";
+                        return "指标采集 (30-60秒)";
                     default:
-                        return "Idle";
+                        return "空闲";
                 }
             }
         }
 
-        /// <summary>
-        /// 当前阶段剩余秒数
-        /// </summary>
         public float CurrentPhaseRemainingSeconds
         {
             get
             {
                 if (!isCollecting) return 0f;
-
                 float elapsed = Time.unscaledTime - collectionStartRealTime;
                 if (currentPhase == CollectionPhase.FrameRate)
-                {
                     return Mathf.Max(0f, FrameRatePhaseDurationSeconds - elapsed);
-                }
-
                 if (currentPhase == CollectionPhase.Metrics)
-                {
                     return Mathf.Max(0f, FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds - elapsed);
-                }
-
                 return 0f;
+            }
+        }
+
+        /// <summary>
+        /// 总采集进度（0~1），用于窗口进度条显示
+        /// </summary>
+        public float CollectionProgress
+        {
+            get
+            {
+                if (!isCollecting) return 0f;
+                float totalDuration = FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds;
+                float elapsed = Time.unscaledTime - collectionStartRealTime;
+                return Mathf.Clamp01(elapsed / totalDuration);
             }
         }
 
@@ -168,23 +135,17 @@ namespace XRDataCollector.Core
                 Destroy(gameObject);
                 return;
             }
-
             Instance = this;
             DontDestroyOnLoad(gameObject);
-
             EnsureRuntimeState();
         }
 
         private void Start()
         {
             EnsureRuntimeState();
-
             InitializeCollectors();
-
             if (config.autoStart)
-            {
                 StartCollection();
-            }
         }
 
         private void Update()
@@ -193,9 +154,7 @@ namespace XRDataCollector.Core
 
             float collectionElapsed = Time.unscaledTime - collectionStartRealTime;
             if (currentPhase == CollectionPhase.FrameRate && collectionElapsed >= FrameRatePhaseDurationSeconds)
-            {
                 SwitchToMetricsPhase();
-            }
 
             if (currentPhase == CollectionPhase.Metrics &&
                 collectionElapsed >= FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds)
@@ -210,31 +169,20 @@ namespace XRDataCollector.Core
             float timePassed = currentTime - lastBatchRealTime;
 
             if (framesPassed > 0 && timePassed > 0f)
-            {
                 cachedFrameRate = framesPassed / timePassed;
-            }
             else if (Time.unscaledDeltaTime > 0f)
-            {
                 cachedFrameRate = 1f / Time.unscaledDeltaTime;
-            }
 
             cachedFrameTimeMs = Time.unscaledDeltaTime * 1000f;
-
             collectTimer += Time.unscaledDeltaTime;
 
             if (collectTimer >= config.collectInterval)
             {
                 collectTimer = 0f;
-
                 if (currentPhase == CollectionPhase.FrameRate)
-                {
                     CollectFrameRateSample();
-                }
                 else if (currentPhase == CollectionPhase.Metrics)
-                {
                     CollectMetricsSample();
-                }
-
                 lastBatchFrameCount = Time.frameCount;
                 lastBatchRealTime = Time.unscaledTime;
             }
@@ -242,25 +190,14 @@ namespace XRDataCollector.Core
 
         private void OnDestroy()
         {
-            if (isCollecting)
-            {
-                StopCollection();
-            }
-
-            if (Instance == this)
-            {
-                Instance = null;
-            }
+            if (isCollecting) StopCollection();
+            if (Instance == this) Instance = null;
         }
 
         #endregion
 
         #region Public Methods
 
-        /// <summary>
-        /// 使用指定配置初始化管理器
-        /// </summary>
-        /// <param name="newConfig">测试配置</param>
         public void Initialize(XRTestConfig newConfig)
         {
             config = newConfig ?? new XRTestConfig();
@@ -268,27 +205,19 @@ namespace XRDataCollector.Core
             InitializeCollectors();
         }
 
-        /// <summary>
-        /// 开始数据采集
-        /// </summary>
         public void StartCollection()
         {
             EnsureRuntimeState();
-            if (allCollectors.Count == 0)
-            {
-                InitializeCollectors();
-            }
+            if (allCollectors.Count == 0) InitializeCollectors();
             if (isCollecting) return;
 
             session = new XRTestSession(config.sessionName);
             session.Start();
-
             samples.Clear();
             collectTimer = 0f;
             isCollecting = true;
             isPlatformSessionCreating = false;
             pendingUploadAfterPlatformSession = false;
-
             cachedFrameRate = 0f;
             cachedFrameTimeMs = 0f;
             lastBatchFrameCount = Time.frameCount;
@@ -298,88 +227,64 @@ namespace XRDataCollector.Core
 
             OnSessionStarted?.Invoke();
             CreatePlatformSessionForCurrentRun();
-            Debug.Log($"[XRTestManager] Session '{config.sessionName}' started. Phase 1: frame rate for 30s.");
+            Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已开始。阶段1：前30秒采集帧率。");
         }
 
-        /// <summary>
-        /// 停止数据采集
-        /// </summary>
         public void StopCollection()
         {
             if (!isCollecting) return;
-
             isCollecting = false;
             session?.Stop();
 
             foreach (var collector in allCollectors)
-            {
                 collector.StopCollecting();
-            }
 
             currentPhase = CollectionPhase.None;
-
             OnSessionStopped?.Invoke();
-            Debug.Log($"[XRTestManager] Session '{config.sessionName}' stopped. Samples collected: {samples.Count}");
+            Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已停止。共采集样本数：{samples.Count}");
 
             if (config.enableNetworkUpload && samples.Count > 0)
-            {
                 UploadData("", null);
-            }
         }
 
-        /// <summary>
-        /// 使用指定导出器导出数据
-        /// </summary>
-        /// <param name="exporter">数据导出器</param>
-        /// <param name="filePath">导出文件路径</param>
         public void ExportData(IDataExporter exporter, string filePath)
         {
             if (exporter == null)
             {
-                Debug.LogError("[XRTestManager] Exporter is null.");
+                Debug.LogError("[XRTestManager] 导出器为空。");
                 return;
             }
-
             if (samples.Count == 0)
             {
-                Debug.LogWarning("[XRTestManager] No samples to export.");
+                Debug.LogWarning("[XRTestManager] 没有可导出的样本。");
                 return;
             }
-
             try
             {
                 exporter.Export(samples, session, filePath);
                 OnDataExported?.Invoke(filePath);
-                Debug.Log($"[XRTestManager] Data exported to: {filePath}");
+                Debug.Log($"[XRTestManager] 数据已导出至：{filePath}");
             }
             catch (Exception e)
             {
-                Debug.LogError($"[XRTestManager] Export failed: {e.Message}");
+                Debug.LogError($"[XRTestManager] 导出失败：{e.Message}");
             }
         }
 
-        /// <summary>
-        /// 上传数据到指定服务器
-        /// </summary>
-        /// <param name="url">上传地址</param>
         public void UploadData(string url, string authToken = null)
         {
             if (samples.Count == 0)
             {
-                Debug.LogWarning("[XRTestManager] No samples to upload.");
+                Debug.LogWarning("[XRTestManager] 没有可上传的样本。");
                 OnDataUploaded?.Invoke(false);
                 return;
             }
 
-            if (string.IsNullOrEmpty(url) &&
-                config != null &&
-                config.autoCreateSession &&
-                session != null &&
-                session.PlatformSessionId <= 0 &&
-                isPlatformSessionCreating)
+            if (string.IsNullOrEmpty(url) && config != null && config.autoCreateSession &&
+                session != null && session.PlatformSessionId <= 0 && isPlatformSessionCreating)
             {
                 pendingUploadAfterPlatformSession = true;
-                Debug.Log("[XRTestManager] Platform session is still being created. Upload will continue after it is ready.");
+                Debug.Log("[XRTestManager] 平台会话正在创建中，上传将在就绪后继续。");
                 return;
             }
 
@@ -387,55 +292,28 @@ namespace XRDataCollector.Core
             if (string.IsNullOrEmpty(url))
             {
                 EnsureRuntimeState();
-                uploader.UploadAsync(samples, session, config, success =>
-                {
-                    OnDataUploaded?.Invoke(success);
-                });
+                uploader.UploadAsync(samples, session, config, success => OnDataUploaded?.Invoke(success));
                 return;
             }
 
-            string token = string.IsNullOrEmpty(authToken) ? config?.authToken : authToken;
-            uploader.UploadAsync(samples, session, url, token, success =>
-            {
-                OnDataUploaded?.Invoke(success);
-            });
+            string token = string.IsNullOrEmpty(authToken) ? config?.deviceToken : authToken;
+            uploader.UploadAsync(samples, session, url, token, success => OnDataUploaded?.Invoke(success));
         }
 
-        /// <summary>
-        /// 获取最新的性能样本
-        /// </summary>
-        /// <returns>最新样本，如果没有则返回 null</returns>
         public PerformanceSample GetLatestSample()
         {
             if (samples.Count == 0) return null;
             return samples[samples.Count - 1];
         }
 
-        /// <summary>
-        /// 获取所有采集的样本（副本）
-        /// </summary>
-        /// <returns>样本列表副本</returns>
         public List<PerformanceSample> GetAllSamples()
         {
             return new List<PerformanceSample>(samples);
         }
 
-        /// <summary>
-        /// 获取样本数量
-        /// </summary>
-        /// <returns>已采集的样本总数</returns>
-        public int GetSampleCount()
-        {
-            return samples.Count;
-        }
+        public int GetSampleCount() => samples.Count;
 
-        /// <summary>
-        /// 清除所有已采集的样本
-        /// </summary>
-        public void ClearSamples()
-        {
-            samples.Clear();
-        }
+        public void ClearSamples() => samples.Clear();
 
         #endregion
 
@@ -445,9 +323,7 @@ namespace XRDataCollector.Core
         {
             EnsureRuntimeState();
             if (!config.enableNetworkUpload || !config.autoCreateSession || config.projectId <= 0 || session == null)
-            {
                 return;
-            }
 
             var targetSession = session;
             isPlatformSessionCreating = true;
@@ -456,21 +332,17 @@ namespace XRDataCollector.Core
             uploader.CreatePlatformSessionAsync(config, targetSession, (sessionId, runIndex, platformName, error) =>
             {
                 isPlatformSessionCreating = false;
-
-                if (targetSession != session)
-                {
-                    return;
-                }
+                if (targetSession != session) return;
 
                 if (sessionId > 0)
                 {
                     targetSession.BindPlatformSession(sessionId, runIndex, platformName);
                     OnPlatformSessionCreated?.Invoke(sessionId);
-                    Debug.Log($"[XRTestManager] Platform session created: {sessionId}, run #{runIndex}.");
+                    Debug.Log($"[XRTestManager] 平台会话已创建：{sessionId}，运行 #{runIndex}。");
                 }
                 else if (!string.IsNullOrEmpty(error))
                 {
-                    Debug.LogError($"[XRTestManager] Platform session create failed: {error}");
+                    Debug.LogError($"[XRTestManager] 平台会话创建失败：{error}");
                 }
 
                 if (pendingUploadAfterPlatformSession && samples.Count > 0)
@@ -489,7 +361,6 @@ namespace XRDataCollector.Core
 
             frameRateCollector = new FrameRateCollector();
             frameTimeCollector = new FrameTimeCollector();
-
             var cpuCollector = new CpuUsageCollector();
             var gpuCollector = new GpuUsageCollector();
             var memoryCollector = new MemoryCollector();
@@ -511,37 +382,15 @@ namespace XRDataCollector.Core
             batchCollectors.Add(renderQualityCollector);
         }
 
-        private void Reset()
-        {
-            EnsureRuntimeState();
-        }
-
-        private void OnValidate()
-        {
-            EnsureRuntimeState();
-        }
+        private void Reset() => EnsureRuntimeState();
+        private void OnValidate() => EnsureRuntimeState();
 
         private void EnsureRuntimeState()
         {
-            if (config == null)
-            {
-                config = new XRTestConfig();
-            }
-
-            if (allCollectors == null)
-            {
-                allCollectors = new List<IPerformanceCollector>();
-            }
-
-            if (batchCollectors == null)
-            {
-                batchCollectors = new List<IPerformanceCollector>();
-            }
-
-            if (samples == null)
-            {
-                samples = new List<PerformanceSample>();
-            }
+            if (config == null) config = new XRTestConfig();
+            if (allCollectors == null) allCollectors = new List<IPerformanceCollector>();
+            if (batchCollectors == null) batchCollectors = new List<IPerformanceCollector>();
+            if (samples == null) samples = new List<PerformanceSample>();
         }
 
         private void StartFrameRatePhase()
@@ -555,18 +404,14 @@ namespace XRDataCollector.Core
         {
             frameRateCollector?.StopCollecting();
             frameTimeCollector?.StopCollecting();
-
             foreach (var collector in batchCollectors)
-            {
                 collector.StartCollecting();
-            }
 
             currentPhase = CollectionPhase.Metrics;
             collectTimer = 0f;
             lastBatchFrameCount = Time.frameCount;
             lastBatchRealTime = Time.unscaledTime;
-
-            Debug.Log("[XRTestManager] Phase 2 started: collecting non-frame-rate metrics for 30s.");
+            Debug.Log("[XRTestManager] 阶段2已开始：采集其他指标（非帧率），时长30秒。");
         }
 
         private PerformanceSample CreateBaseSample(string phase)
@@ -586,7 +431,6 @@ namespace XRDataCollector.Core
             sample.frameRate = cachedFrameRate;
             sample.frameTimeMs = cachedFrameTimeMs;
             sample.rawFrameTimeMs = cachedFrameTimeMs;
-
             samples.Add(sample);
             OnSampleCollected?.Invoke(sample);
         }
@@ -594,12 +438,8 @@ namespace XRDataCollector.Core
         private void CollectMetricsSample()
         {
             var sample = CreateBaseSample(MetricsPhaseName);
-
             foreach (var collector in batchCollectors)
-            {
                 collector.Collect(ref sample);
-            }
-
             samples.Add(sample);
             OnSampleCollected?.Invoke(sample);
         }

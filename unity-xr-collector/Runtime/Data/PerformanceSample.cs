@@ -195,13 +195,13 @@ namespace XRDataCollector.Data
         /// <returns>摘要字符串</returns>
         public string GetSummary()
         {
-            return $"Time: {timestamp:HH:mm:ss.fff}, " +
-                   $"FPS: {frameRate:F1}, " +
-                   $"FrameTime: {frameTimeMs:F2}ms, " +
-                   $"CPU: {cpuUsagePercent:F1}%, " +
-                   $"GPU: {gpuUsagePercent:F1}%, " +
-                   $"Memory: {totalMemoryMB:F1}MB, " +
-                   $"DrawCalls: {drawCalls}";
+            return $"时间：{timestamp:HH:mm:ss.fff}, " +
+                   $"帧率：{frameRate:F1}, " +
+                   $"帧时间：{frameTimeMs:F2}毫秒, " +
+                   $"CPU：{cpuUsagePercent:F1}%, " +
+                   $"GPU：{gpuUsagePercent:F1}%, " +
+                   $"内存：{totalMemoryMB:F1}MB, " +
+                   $"DrawCalls：{drawCalls}";
         }
 
         #endregion

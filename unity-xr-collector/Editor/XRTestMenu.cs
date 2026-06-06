@@ -21,10 +21,7 @@ namespace XRDataCollector.Editor
 
         #region Window Menu
 
-        /// <summary>
-        /// 打开 XR 测试窗口
-        /// </summary>
-        [MenuItem("XR Test/Open Test Window", false, 0)]
+        [MenuItem("XR 测试/打开测试窗口", false, 0)]
         public static void OpenTestWindow()
         {
             XRTestWindow.ShowWindow();
@@ -34,76 +31,61 @@ namespace XRDataCollector.Editor
 
         #region Session Control
 
-        /// <summary>
-        /// 开始测试会话
-        /// </summary>
-        [MenuItem("XR Test/Session/Start Collection", false, 100)]
+        [MenuItem("XR 测试/会话/开始采集", false, 100)]
         public static void StartCollection()
         {
             var manager = GetManager();
             if (manager == null)
             {
-                Debug.LogWarning("[XRTestMenu] XRTestManager not found. Please add it to a GameObject in the scene.");
-                EditorUtility.DisplayDialog("XR Test", "XRTestManager not found in scene. Please add it to a GameObject first.", "OK");
+                Debug.LogWarning("[XRTestMenu] 未找到 XRTestManager，请将其添加到场景中的 GameObject 上。");
+                EditorUtility.DisplayDialog("XR 测试", "场景中未找到 XRTestManager，请先将其添加到 GameObject 上。", "确定");
                 return;
             }
 
             manager.StartCollection();
-            Debug.Log("[XRTestMenu] Collection started.");
+            Debug.Log("[XRTestMenu] 采集已开始。");
         }
 
-        /// <summary>
-        /// 停止测试会话
-        /// </summary>
-        [MenuItem("XR Test/Session/Stop Collection", false, 101)]
+        [MenuItem("XR 测试/会话/停止采集", false, 101)]
         public static void StopCollection()
         {
             var manager = GetManager();
             if (manager == null)
             {
-                Debug.LogWarning("[XRTestMenu] XRTestManager not found.");
+                Debug.LogWarning("[XRTestMenu] 未找到 XRTestManager。");
                 return;
             }
 
             manager.StopCollection();
-            Debug.Log("[XRTestMenu] Collection stopped.");
+            Debug.Log("[XRTestMenu] 采集已停止。");
         }
 
-        /// <summary>
-        /// 清除所有样本
-        /// </summary>
-        [MenuItem("XR Test/Session/Clear Samples", false, 102)]
+        [MenuItem("XR 测试/会话/清除样本", false, 102)]
         public static void ClearSamples()
         {
             var manager = GetManager();
             if (manager == null)
             {
-                Debug.LogWarning("[XRTestMenu] XRTestManager not found.");
+                Debug.LogWarning("[XRTestMenu] 未找到 XRTestManager。");
                 return;
             }
 
             int count = manager.GetSampleCount();
             manager.ClearSamples();
-            Debug.Log($"[XRTestMenu] Cleared {count} samples.");
+            Debug.Log($"[XRTestMenu] 已清除 {count} 个样本。");
         }
 
         #endregion
 
         #region Export
 
-        /// <summary>
-        /// 导出为 JSON
-        /// </summary>
-        [MenuItem("XR Test/Export/Export as JSON", false, 200)]
+        [MenuItem("XR 测试/导出/导出为 JSON", false, 200)]
         public static void ExportAsJson()
         {
             ExportData(ExportFormat.Json);
         }
 
-        /// <summary>
-        /// 导出为 CSV
-        /// </summary>
-        [MenuItem("XR Test/Export/Export as CSV", false, 201)]
+        [MenuItem("XR 测试/导出/导出为 CSV", false, 201)]
         public static void ExportAsCsv()
         {
             ExportData(ExportFormat.Csv);
@@ -114,13 +96,13 @@ namespace XRDataCollector.Editor
             var manager = GetManager();
             if (manager == null)
             {
-                EditorUtility.DisplayDialog("XR Test", "XRTestManager not found in scene.", "OK");
+                EditorUtility.DisplayDialog("XR 测试", "场景中未找到 XRTestManager。", "确定");
                 return;
             }
 
             if (manager.GetSampleCount() == 0)
             {
-                EditorUtility.DisplayDialog("XR Test", "No samples to export.", "OK");
+                EditorUtility.DisplayDialog("XR 测试", "没有可导出的样本。", "确定");
                 return;
             }
 
@@ -128,7 +110,7 @@ namespace XRDataCollector.Editor
             string defaultName = $"XRTest_{System.DateTime.Now:yyyyMMdd_HHmmss}.{extension}";
 
             string path = EditorUtility.SaveFilePanel(
-                $"Export as {format}",
+                $"导出为 {format}",
                 Application.persistentDataPath,
                 defaultName,
                 extension
@@ -143,11 +125,11 @@ namespace XRDataCollector.Editor
                     : new Exporters.CsvExporter();
 
                 manager.ExportData(exporter, path);
-                EditorUtility.DisplayDialog("XR Test", $"Data exported to:\n{path}", "OK");
+                EditorUtility.DisplayDialog("XR 测试", $"数据已导出至：\n{path}", "确定");
             }
             catch (System.Exception e)
             {
-                EditorUtility.DisplayDialog("XR Test", $"Export failed:\n{e.Message}", "OK");
+                EditorUtility.DisplayDialog("XR 测试", $"导出失败：\n{e.Message}", "确定");
             }
         }
 
@@ -155,16 +137,13 @@ namespace XRDataCollector.Editor
 
         #region Scene Setup
 
-        /// <summary>
-        /// 在当前场景中创建 XRTestManager
-        /// </summary>
-        [MenuItem("XR Test/Setup/Create XRTestManager", false, 300)]
+        [MenuItem("XR 测试/设置/创建 XRTestManager", false, 300)]
         public static void CreateXRTestManager()
         {
             var existing = Object.FindObjectOfType<XRTestManager>();
             if (existing != null)
             {
-                EditorUtility.DisplayDialog("XR Test", "XRTestManager already exists in the scene.", "OK");
+                EditorUtility.DisplayDialog("XR 测试", "场景中已存在 XRTestManager。", "确定");
                 Selection.activeGameObject = existing.gameObject;
                 return;
             }
@@ -172,18 +151,15 @@ namespace XRDataCollector.Editor
             var go = new GameObject("XRTestManager");
             go.AddComponent<XRTestManager>();
 
-            Undo.RegisterCreatedObjectUndo(go, "Create XRTestManager");
+            Undo.RegisterCreatedObjectUndo(go, "创建 XRTestManager");
             Selection.activeGameObject = go;
 
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
 
-            Debug.Log("[XRTestMenu] Created XRTestManager in scene.");
+            Debug.Log("[XRTestMenu] 已在场景中创建 XRTestManager。");
         }
 
-        /// <summary>
-        /// 查找场景中的 XRTestManager
-        /// </summary>
-        [MenuItem("XR Test/Setup/Find XRTestManager", false, 301)]
+        [MenuItem("XR 测试/设置/查找 XRTestManager", false, 301)]
         public static void FindXRTestManager()
         {
             var manager = Object.FindObjectOfType<XRTestManager>();
@@ -194,7 +170,7 @@ namespace XRDataCollector.Editor
             }
             else
             {
-                EditorUtility.DisplayDialog("XR Test", "XRTestManager not found in scene.", "OK");
+                EditorUtility.DisplayDialog("XR 测试", "场景中未找到 XRTestManager。", "确定");
             }
         }
 
@@ -202,30 +178,21 @@ namespace XRDataCollector.Editor
 
         #region Validation
 
-        /// <summary>
-        /// 验证是否可以开始采集
-        /// </summary>
-        [MenuItem("XR Test/Session/Start Collection", true)]
+        [MenuItem("XR 测试/会话/开始采集", true)]
         public static bool ValidateStartCollection()
         {
             var manager = GetManager();
             return manager != null && !manager.IsCollecting;
         }
 
-        /// <summary>
-        /// 验证是否可以停止采集
-        /// </summary>
-        [MenuItem("XR Test/Session/Stop Collection", true)]
+        [MenuItem("XR 测试/会话/停止采集", true)]
         public static bool ValidateStopCollection()
         {
             var manager = GetManager();
             return manager != null && manager.IsCollecting;
         }
 
-        /// <summary>
-        /// 验证是否可以清除样本
-        /// </summary>
-        [MenuItem("XR Test/Session/Clear Samples", true)]
+        [MenuItem("XR 测试/会话/清除样本", true)]
         public static bool ValidateClearSamples()
         {
             var manager = GetManager();
@@ -236,10 +203,7 @@ namespace XRDataCollector.Editor
 
         #region Help
 
-        /// <summary>
-        /// 打开文档
-        /// </summary>
-        [MenuItem("XR Test/Help/Documentation", false, 400)]
+        [MenuItem("XR 测试/帮助/文档", false, 400)]
         public static void OpenDocumentation()
         {
             string packagePath = "Packages/com.xr.testdatacollector/README.md";
@@ -251,25 +215,22 @@ namespace XRDataCollector.Editor
             }
             else
             {
-                EditorUtility.DisplayDialog("XR Test", "Documentation not found.", "OK");
+                EditorUtility.DisplayDialog("XR 测试", "未找到文档。", "确定");
             }
         }
 
-        /// <summary>
-        /// 关于
-        /// </summary>
-        [MenuItem("XR Test/Help/About", false, 401)]
+        [MenuItem("XR 测试/帮助/关于", false, 401)]
         public static void ShowAbout()
         {
             EditorUtility.DisplayDialog(
-                "About XR Data Collector",
-                "XR Data Collector v1.0.0\n\n" +
-                "Unity XR performance data collection and testing plugin.\n\n" +
-                "Supports: Frame Rate, Frame Time, CPU/GPU Usage, Memory, Device Info\n" +
-                "Export: JSON, CSV\n" +
-                "Network: HTTP Upload\n\n" +
-                "Unity 2022.3 LTS | OpenXR Compatible",
-                "OK"
+                "关于 XR 数据采集器",
+                "XR 数据采集器 v1.0.0\n\n" +
+                "Unity XR 性能数据采集与测试插件。\n\n" +
+                "支持：帧率、帧时间、CPU/GPU 占用、内存、设备信息\n" +
+                "导出：JSON、CSV\n" +
+                "网络：HTTP 上传\n\n" +
+                "Unity 2022.3 LTS | OpenXR 兼容",
+                "确定"
             );
         }
 

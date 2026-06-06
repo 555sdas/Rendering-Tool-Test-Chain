@@ -107,12 +107,14 @@ const Projects: React.FC = () => {
       title: '项目名称',
       dataIndex: 'name',
       key: 'name',
+      width: 160,
       render: (text: string) => <strong>{text}</strong>,
     },
     {
       title: '类型',
       dataIndex: 'project_type',
       key: 'project_type',
+      width: 100,
       render: (type: string) => <Tag color={typeColors[type] || 'default'}>{type}</Tag>,
     },
     {
@@ -125,6 +127,7 @@ const Projects: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      width: 90,
       render: (status: string) => {
         const config = statusMap[status] || statusMap.draft;
         return <Tag color={config.color}>{config.text}</Tag>;
@@ -134,11 +137,14 @@ const Projects: React.FC = () => {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      width: 110,
       render: (date: string) => new Date(date).toLocaleDateString('zh-CN'),
     },
     {
       title: '操作',
       key: 'action',
+      width: 230,
+      fixed: 'right' as const,
       render: (_: unknown, record: Project) => (
         <Space size="small">
           <Button type="text" icon={<EyeOutlined />} size="small" onClick={() => navigate(`/projects/${record.id}`)}>
@@ -189,6 +195,7 @@ const Projects: React.FC = () => {
         rowKey="id"
         pagination={{ pageSize: 10 }}
         loading={loading}
+        scroll={{ x: 800 }}
       />
 
       <Modal
