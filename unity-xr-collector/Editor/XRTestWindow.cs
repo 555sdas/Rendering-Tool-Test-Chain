@@ -843,10 +843,12 @@ namespace XRDataCollector.Editor
             if (string.IsNullOrEmpty(authToken))
             {
                 authToken = DeviceTokenLoginInEditor(baseUrl, config.deviceToken);
+                if (string.IsNullOrEmpty(authToken))
+                    authToken = LoginInEditor(baseUrl, config.username, config.password);
             }
 
             if (string.IsNullOrEmpty(authToken))
-                throw new InvalidOperationException("设备令牌登录失败，请检查设备令牌。");
+                throw new InvalidOperationException("平台登录失败，请检查平台地址、设备令牌或用户名密码。");
 
             string json = SendEditorRequest("GET", $"{baseUrl}/data-collection/platform/projects?limit=100", null, null, authToken);
             return ParseProjectList(json);
@@ -854,19 +856,36 @@ namespace XRDataCollector.Editor
 
         private string DeviceTokenLoginInEditor(string baseUrl, string deviceToken)
         {
+            if (string.IsNullOrEmpty(deviceToken))
+                return null;
+
             string body = "{\"device_token\":\"" + Uri.EscapeDataString(deviceToken ?? "") + "\"}";
-            string json = SendEditorRequest("POST", $"{baseUrl}/auth/device-token/login",
-                "application/json", body, null);
-            return ExtractStringField(json, "access_token");
+            try
+            {
+                string json = SendEditorRequest("POST", $"{baseUrl}/auth/device-token/login",
+                    "application/json", body, null);
+                return ExtractStringField(json, "access_token");
+            }
+            catch (WebException)
+            {
+                return null;
+            }
         }
 
         private string LoginInEditor(string baseUrl, string username, string password)
         {
             string body = "username=" + Uri.EscapeDataString(username ?? "") +
                           "&password=" + Uri.EscapeDataString(password ?? "");
-            string json = SendEditorRequest("POST", $"{baseUrl}/auth/login",
-                "application/x-www-form-urlencoded", body, null);
-            return ExtractStringField(json, "access_token");
+            try
+            {
+                string json = SendEditorRequest("POST", $"{baseUrl}/auth/login",
+                    "application/x-www-form-urlencoded", body, null);
+                return ExtractStringField(json, "access_token");
+            }
+            catch (WebException)
+            {
+                return null;
+            }
         }
 
         private string SendEditorRequest(string method, string url, string contentType, string body, string token)
@@ -904,8 +923,7 @@ namespace XRDataCollector.Editor
 
         private string NormalizeBaseUrl(string value)
         {
-            if (string.IsNullOrEmpty(value)) return "";
-            return value.Trim().TrimEnd('/');
+            return XRTestConfig.NormalizePlatformBaseUrl(value);
         }
 
         private string ExtractStringField(string json, string field)

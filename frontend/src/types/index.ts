@@ -15,7 +15,7 @@ export interface LoginResponse {
   refresh_token: string;
   token_type: string;
   expires_in: number;
-  user: UserInfo;
+  user?: UserInfo | null;
 }
 
 export interface Project {

@@ -349,7 +349,7 @@ namespace XRDataCollector.Network
 #endif
                 if (!success)
                 {
-                    Debug.LogError($"[TestDataUploader] 设备令牌登录失败：{request.error} {request.downloadHandler.text}");
+                    Debug.LogWarning($"[TestDataUploader] 设备令牌登录失败：{request.error} {request.downloadHandler.text}");
                     callback?.Invoke(null);
                     yield break;
                 }
@@ -420,14 +420,22 @@ namespace XRDataCollector.Network
 
             if (session != null)
             {
+                string runtimeMode = Application.isEditor ? "Unity Editor" : "Unity Player";
+                string graphicsApi = SystemInfo.graphicsDeviceType.ToString();
+                string renderPipeline = GetRenderPipelineName();
                 sb.AppendLine("  \"session\": {");
                 sb.AppendLine($"    \"sessionId\": \"{session.SessionId}\",");
+                sb.AppendLine($"    \"platformSessionId\": {session.PlatformSessionId},");
                 sb.AppendLine($"    \"sessionName\": \"{EscapeJson(session.SessionName)}\",");
                 sb.AppendLine($"    \"startTime\": \"{session.StartTime:O}\",");
                 sb.AppendLine($"    \"duration\": {session.ElapsedTime.TotalSeconds:F3},");
                 sb.AppendLine($"    \"unityVersion\": \"{EscapeJson(session.UnityVersion)}\",");
                 sb.AppendLine($"    \"productName\": \"{EscapeJson(session.ProductName)}\",");
-                sb.AppendLine($"    \"appVersion\": \"{EscapeJson(session.AppVersion)}\"");
+                sb.AppendLine($"    \"appVersion\": \"{EscapeJson(session.AppVersion)}\",");
+                sb.AppendLine($"    \"platform\": \"{EscapeJson(session.Platform)}\",");
+                sb.AppendLine($"    \"runtimeMode\": \"{EscapeJson(runtimeMode)}\",");
+                sb.AppendLine($"    \"graphicsApi\": \"{EscapeJson(graphicsApi)}\",");
+                sb.AppendLine($"    \"renderPipeline\": \"{EscapeJson(renderPipeline)}\"");
                 sb.AppendLine("  },");
             }
 
@@ -497,12 +505,17 @@ namespace XRDataCollector.Network
             sb.AppendLine($"        \"deviceModel\": \"{EscapeJson(info.deviceModel)}\",");
             sb.AppendLine($"        \"deviceName\": \"{EscapeJson(info.deviceName)}\",");
             sb.AppendLine($"        \"operatingSystem\": \"{EscapeJson(info.operatingSystem)}\",");
+            sb.AppendLine($"        \"unityVersion\": \"{EscapeJson(info.unityVersion)}\",");
+            sb.AppendLine($"        \"applicationPlatform\": \"{EscapeJson(info.applicationPlatform)}\",");
+            sb.AppendLine($"        \"runtimeMode\": \"{EscapeJson(info.runtimeMode)}\",");
+            sb.AppendLine($"        \"renderPipeline\": \"{EscapeJson(info.renderPipeline)}\",");
             sb.AppendLine($"        \"processorType\": \"{EscapeJson(info.processorType)}\",");
             sb.AppendLine($"        \"processorCount\": {info.processorCount},");
             sb.AppendLine($"        \"systemMemorySize\": {info.systemMemorySize},");
             sb.AppendLine($"        \"graphicsDeviceName\": \"{EscapeJson(info.graphicsDeviceName)}\",");
             sb.AppendLine($"        \"graphicsDeviceVendor\": \"{EscapeJson(info.graphicsDeviceVendor)}\",");
             sb.AppendLine($"        \"graphicsDeviceVersion\": \"{EscapeJson(info.graphicsDeviceVersion)}\",");
+            sb.AppendLine($"        \"graphicsDeviceType\": \"{EscapeJson(info.graphicsDeviceType)}\",");
             sb.AppendLine($"        \"graphicsMemorySize\": {info.graphicsMemorySize},");
             sb.AppendLine($"        \"screenResolution\": \"{EscapeJson(info.screenResolution)}\"");
             sb.AppendLine("      },");
@@ -560,8 +573,13 @@ namespace XRDataCollector.Network
 
         private string NormalizeBaseUrl(string value)
         {
-            if (string.IsNullOrEmpty(value)) return "";
-            return value.Trim().TrimEnd('/');
+            return XRTestConfig.NormalizePlatformBaseUrl(value);
+        }
+
+        private string GetRenderPipelineName()
+        {
+            var pipeline = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+            return pipeline != null ? pipeline.GetType().Name : "Built-in Render Pipeline";
         }
 
         #endregion

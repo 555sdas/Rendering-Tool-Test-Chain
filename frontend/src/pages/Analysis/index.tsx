@@ -18,7 +18,8 @@ import {
 } from 'recharts';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
-import { sessionsApi, type PerformanceSample } from '@/api/sessions';
+import { sessionsApi, type PerformanceSample, type TestSession } from '@/api/sessions';
+import { getConfigNumber, getConfigString } from '@/lib/sessionConfig';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -83,6 +84,7 @@ const Analysis: React.FC = () => {
   const [selectedSessions, setSelectedSessions] = useState<string[]>(sessionIdParam ? [sessionIdParam] : ['session1', 'session2']);
   const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
+  const [selectedSessionDetail, setSelectedSessionDetail] = useState<TestSession | null>(null);
   const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
 
   useEffect(() => {
@@ -112,17 +114,20 @@ const Analysis: React.FC = () => {
     const sessionId = Number(selectedSessions[0]);
     if (!Number.isFinite(sessionId)) {
       setFullReport(null);
+      setSelectedSessionDetail(null);
       setSampleChartData([]);
       return;
     }
 
     const loadAnalysis = async () => {
       try {
-        const [report, samples] = await Promise.all([
+        const [report, sessionDetail, samples] = await Promise.all([
           analysisApi.getFullReport(sessionId),
+          sessionsApi.get(sessionId),
           sessionsApi.getSamples(sessionId, { limit: 300 }),
         ]);
         setFullReport(report);
+        setSelectedSessionDetail(sessionDetail);
         setSampleChartData(samples.slice(0, 120).map((sample: PerformanceSample, index) => ({
           time: `${index}s`,
           fps: Number(sample.fps || 0),
@@ -136,6 +141,16 @@ const Analysis: React.FC = () => {
     };
     loadAnalysis();
   }, [selectedSessions]);
+
+  const reportConfig = fullReport?.session_info.config || selectedSessionDetail?.config;
+  const getReportString = (keys: string[], fallback = '-') => getConfigString(reportConfig, keys, fallback);
+  const getReportNumber = (keys: string[]) => getConfigNumber(reportConfig, keys);
+  const unityVersion = getReportString(['unity_version', 'unityVersion'], '');
+  const engineDisplay = getReportString(['engine'], unityVersion ? `Unity ${unityVersion}` : '-');
+  const graphicsApiDisplay = getReportString(
+    ['graphics_api', 'graphicsApi', 'graphicsDeviceType'],
+    getReportString(['gpu_version', 'graphicsDeviceVersion']),
+  );
 
   const comparisonColumns = [
     {
@@ -431,45 +446,45 @@ const Analysis: React.FC = () => {
                 <Col xs={24} sm={12}>
                   <Descriptions title="设备概况" bordered size="small" column={1}>
                     <Descriptions.Item label="设备名称">
-                      {String(fullReport.session_info.config?.device_name || fullReport.session_info.device_model || '-')}
+                      {getReportString(['device_name', 'deviceName'], fullReport.session_info.device_model || '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="设备型号">
-                      {String(fullReport.session_info.config?.device_model || fullReport.session_info.device_model || '-')}
+                      {getReportString(['device_model', 'deviceModel'], fullReport.session_info.device_model || '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="操作系统">
-                      {String(fullReport.session_info.config?.os_version || fullReport.session_info.os_version || '-')}
+                      {getReportString(['os_version', 'operatingSystem'], fullReport.session_info.os_version || '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="屏幕分辨率">
-                      {String(fullReport.session_info.config?.screen_resolution || '-')}
+                      {getReportString(['screen_resolution', 'screenResolution'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="运行环境">
-                      {String(fullReport.session_info.config?.xr_runtime || fullReport.session_info.xr_runtime || '-')}
+                      {getReportString(['xr_runtime', 'xrRuntime', 'runtime_mode', 'runtimeMode'], fullReport.session_info.xr_runtime || '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="应用版本">
-                      {String(fullReport.session_info.config?.app_version || fullReport.session_info.app_version || '-')}
+                      {getReportString(['app_version', 'appVersion'], fullReport.session_info.app_version || '-')}
                     </Descriptions.Item>
                   </Descriptions>
                 </Col>
                 <Col xs={24} sm={12}>
                   <Descriptions title="硬件规格" bordered size="small" column={1}>
                     <Descriptions.Item label="CPU 型号">
-                      {String(fullReport.session_info.config?.cpu_model || '-')}
+                      {getReportString(['cpu_model', 'processorType'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="CPU 核心数">
-                      {String(fullReport.session_info.config?.processor_count || '-')}
+                      {String(getReportNumber(['processor_count', 'processorCount']) ?? '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="GPU 型号">
-                      {String(fullReport.session_info.config?.gpu_model || '-')}
+                      {getReportString(['gpu_model', 'graphicsDeviceName'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="GPU 厂商">
-                      {String(fullReport.session_info.config?.gpu_vendor || '-')}
+                      {getReportString(['gpu_vendor', 'graphicsDeviceVendor'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="GPU 驱动版本">
-                      {String(fullReport.session_info.config?.gpu_version || '-')}
+                      {getReportString(['gpu_version', 'graphicsDeviceVersion'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="显存">
-                      {fullReport.session_info.config?.gpu_memory_mb != null
-                        ? `${fullReport.session_info.config.gpu_memory_mb} MB`
+                      {getReportNumber(['gpu_memory_mb', 'graphicsMemorySize']) != null
+                        ? `${getReportNumber(['gpu_memory_mb', 'graphicsMemorySize'])} MB`
                         : '-'}
                     </Descriptions.Item>
                   </Descriptions>
@@ -479,20 +494,26 @@ const Analysis: React.FC = () => {
                 <Col xs={24} sm={12}>
                   <Descriptions title="内存与引擎" bordered size="small" column={1}>
                     <Descriptions.Item label="系统内存">
-                      {fullReport.session_info.config?.system_memory_mb != null
-                        ? `${fullReport.session_info.config.system_memory_mb} MB`
-                        : fullReport.session_info.config?.ram_gb != null
-                          ? `${fullReport.session_info.config.ram_gb} GB`
+                      {getReportNumber(['system_memory_mb', 'systemMemorySize']) != null
+                        ? `${getReportNumber(['system_memory_mb', 'systemMemorySize'])} MB`
+                        : getReportNumber(['ram_gb']) != null
+                          ? `${getReportNumber(['ram_gb'])} GB`
                           : '-'}
                     </Descriptions.Item>
                     <Descriptions.Item label="Unity 版本">
-                      {String(fullReport.session_info.config?.unity_version || '-')}
+                      {engineDisplay}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="图形 API">
+                      {graphicsApiDisplay}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="渲染管线">
+                      {getReportString(['render_pipeline', 'renderPipeline'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="XR 设备名称">
-                      {String(fullReport.session_info.config?.xr_device_name || '-')}
+                      {getReportString(['xr_device_name', 'xrDeviceName'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="样本数">
-                      {String(fullReport.session_info.config?.sample_count ?? '-')}
+                      {String(getReportNumber(['sample_count', 'sampleCount']) ?? '-')}
                     </Descriptions.Item>
                   </Descriptions>
                 </Col>

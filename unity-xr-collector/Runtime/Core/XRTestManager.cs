@@ -36,8 +36,6 @@ namespace XRDataCollector.Core
             Metrics
         }
 
-        private const float FrameRatePhaseDurationSeconds = 30f;
-        private const float MetricsPhaseDurationSeconds = 30f;
         private const string FrameRatePhaseName = "frame_rate";
         private const string MetricsPhaseName = "metrics";
 
@@ -79,6 +77,9 @@ namespace XRDataCollector.Core
 
         public XRTestSession Session => session;
         public int PlatformSessionId => session != null ? session.PlatformSessionId : 0;
+
+        private float FrameRatePhaseDurationSeconds => Mathf.Max(1f, config != null ? config.frameRateDurationSeconds : 30f);
+        private float MetricsPhaseDurationSeconds => Mathf.Max(1f, config != null ? config.metricsDurationSeconds : 30f);
 
         public string CurrentCollectionPhase
         {
@@ -213,6 +214,8 @@ namespace XRDataCollector.Core
 
             session = new XRTestSession(config.sessionName);
             session.Start();
+            if (config.platformSessionId > 0)
+                session.BindPlatformSession(config.platformSessionId, 0, config.sessionName);
             samples.Clear();
             collectTimer = 0f;
             isCollecting = true;
@@ -292,12 +295,12 @@ namespace XRDataCollector.Core
             if (string.IsNullOrEmpty(url))
             {
                 EnsureRuntimeState();
-                uploader.UploadAsync(samples, session, config, success => OnDataUploaded?.Invoke(success));
+                uploader.UploadAsync(samples, session, config, NotifyDataUploaded);
                 return;
             }
 
             string token = string.IsNullOrEmpty(authToken) ? config?.deviceToken : authToken;
-            uploader.UploadAsync(samples, session, url, token, success => OnDataUploaded?.Invoke(success));
+            uploader.UploadAsync(samples, session, url, token, NotifyDataUploaded);
         }
 
         public PerformanceSample GetLatestSample()
@@ -353,6 +356,28 @@ namespace XRDataCollector.Core
             });
         }
 
+        private void NotifyDataUploaded(bool success)
+        {
+            OnDataUploaded?.Invoke(success);
+            QuitAfterCommandLineRun(success);
+        }
+
+        private void QuitAfterCommandLineRun(bool success)
+        {
+            if (config == null || !config.quitOnComplete) return;
+
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (UnityEditor.EditorApplication.isPlaying)
+                    UnityEditor.EditorApplication.isPlaying = false;
+                UnityEditor.EditorApplication.Exit(success ? 0 : 1);
+            };
+#else
+            Application.Quit(success ? 0 : 1);
+#endif
+        }
+
         private void InitializeCollectors()
         {
             EnsureRuntimeState();
@@ -365,20 +390,30 @@ namespace XRDataCollector.Core
             var gpuCollector = new GpuUsageCollector();
             var memoryCollector = new MemoryCollector();
             var deviceCollector = new DeviceInfoCollector();
-            var renderQualityCollector = new RenderQualityCollector();
+            var renderQualityCollector = new RenderQualityCollector(config);
 
-            allCollectors.Add(frameRateCollector);
-            allCollectors.Add(frameTimeCollector);
-            allCollectors.Add(cpuCollector);
-            allCollectors.Add(gpuCollector);
-            allCollectors.Add(memoryCollector);
-            allCollectors.Add(deviceCollector);
+            if (config.collectFrameRate)
+                allCollectors.Add(frameRateCollector);
+            if (config.collectFrameTime)
+                allCollectors.Add(frameTimeCollector);
+            if (config.collectCpuUsage)
+                allCollectors.Add(cpuCollector);
+            if (config.collectGpuUsage)
+                allCollectors.Add(gpuCollector);
+            if (config.collectMemory)
+                allCollectors.Add(memoryCollector);
+            if (config.collectDeviceInfo)
+                allCollectors.Add(deviceCollector);
             allCollectors.Add(renderQualityCollector);
 
-            batchCollectors.Add(cpuCollector);
-            batchCollectors.Add(gpuCollector);
-            batchCollectors.Add(memoryCollector);
-            batchCollectors.Add(deviceCollector);
+            if (config.collectCpuUsage)
+                batchCollectors.Add(cpuCollector);
+            if (config.collectGpuUsage)
+                batchCollectors.Add(gpuCollector);
+            if (config.collectMemory)
+                batchCollectors.Add(memoryCollector);
+            if (config.collectDeviceInfo)
+                batchCollectors.Add(deviceCollector);
             batchCollectors.Add(renderQualityCollector);
         }
 
@@ -388,6 +423,7 @@ namespace XRDataCollector.Core
         private void EnsureRuntimeState()
         {
             if (config == null) config = new XRTestConfig();
+            config.NormalizeRuntimeSettings();
             if (allCollectors == null) allCollectors = new List<IPerformanceCollector>();
             if (batchCollectors == null) batchCollectors = new List<IPerformanceCollector>();
             if (samples == null) samples = new List<PerformanceSample>();
@@ -396,8 +432,10 @@ namespace XRDataCollector.Core
         private void StartFrameRatePhase()
         {
             currentPhase = CollectionPhase.FrameRate;
-            frameRateCollector?.StartCollecting();
-            frameTimeCollector?.StartCollecting();
+            if (config.collectFrameRate)
+                frameRateCollector?.StartCollecting();
+            if (config.collectFrameTime)
+                frameTimeCollector?.StartCollecting();
         }
 
         private void SwitchToMetricsPhase()
@@ -428,9 +466,13 @@ namespace XRDataCollector.Core
         private void CollectFrameRateSample()
         {
             var sample = CreateBaseSample(FrameRatePhaseName);
-            sample.frameRate = cachedFrameRate;
-            sample.frameTimeMs = cachedFrameTimeMs;
-            sample.rawFrameTimeMs = cachedFrameTimeMs;
+            if (config.collectFrameRate)
+                sample.frameRate = cachedFrameRate;
+            if (config.collectFrameTime)
+            {
+                sample.frameTimeMs = cachedFrameTimeMs;
+                sample.rawFrameTimeMs = cachedFrameTimeMs;
+            }
             samples.Add(sample);
             OnSampleCollected?.Invoke(sample);
         }

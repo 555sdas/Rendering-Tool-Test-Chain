@@ -13,6 +13,7 @@ from app.routers import (
     exports_router,
     audit_logs_router,
     cloud_ar_router,
+    unity_runner_router,
 )
 
 settings = get_settings()
@@ -40,6 +41,7 @@ app.include_router(test_reports_router, prefix=settings.API_V1_PREFIX)
 app.include_router(exports_router, prefix=settings.API_V1_PREFIX)
 app.include_router(audit_logs_router, prefix=settings.API_V1_PREFIX)
 app.include_router(cloud_ar_router, prefix=settings.API_V1_PREFIX)
+app.include_router(unity_runner_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.on_event("startup")

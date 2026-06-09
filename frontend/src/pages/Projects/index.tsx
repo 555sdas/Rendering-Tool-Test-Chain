@@ -15,6 +15,7 @@ import {
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { projectsApi, type Project, type ProjectCreate } from '@/api/projects';
+import { formatDate } from '@/lib/datetime';
 
 const { Option } = Select;
 
@@ -138,7 +139,7 @@ const Projects: React.FC = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 110,
-      render: (date: string) => new Date(date).toLocaleDateString('zh-CN'),
+      render: (date: string) => formatDate(date),
     },
     {
       title: '操作',

@@ -31,6 +31,14 @@ namespace XRDataCollector.Data
         /// </summary>
         public string operatingSystem;
 
+        public string unityVersion;
+
+        public string applicationPlatform;
+
+        public string runtimeMode;
+
+        public string renderPipeline;
+
         #endregion
 
         #region Processor Info
@@ -68,6 +76,8 @@ namespace XRDataCollector.Data
         /// 显卡驱动版本
         /// </summary>
         public string graphicsDeviceVersion;
+
+        public string graphicsDeviceType;
 
         /// <summary>
         /// 显存大小（MB）

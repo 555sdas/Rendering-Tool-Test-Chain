@@ -14,6 +14,7 @@ from app.models.performance_sample import PerformanceSample
 from app.core.permissions import Permission, require_permission, get_current_user
 from app.services.data_collection_service import DataCollectionService
 from app.services.audit_service import log_audit
+from app.utils.datetime import isoformat_utc, parse_utc_datetime
 
 router = APIRouter(prefix="/data-collection", tags=["数据采集"])
 
@@ -107,11 +108,7 @@ def _first_value(*values):
 
 
 def _try_parse_timestamp(value) -> Optional[datetime]:
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str) and value:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    return None
+    return parse_utc_datetime(value)
 
 
 def _parse_timestamp(value) -> datetime:
@@ -161,11 +158,11 @@ def _session_response(session: TestSession) -> dict:
         "user_id": session.user_id,
         "project_id": session.project_id,
         "config": session.config,
-        "started_at": session.started_at.isoformat() if session.started_at else None,
-        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "started_at": isoformat_utc(session.started_at),
+        "ended_at": isoformat_utc(session.ended_at),
         "duration_seconds": session.duration_seconds,
-        "created_at": session.created_at.isoformat() if session.created_at else None,
-        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "created_at": isoformat_utc(session.created_at),
+        "updated_at": isoformat_utc(session.updated_at),
     }
 
 
@@ -184,8 +181,8 @@ def _platform_project_response(project: Project, db: Session) -> dict:
         "status": project.status,
         "session_count": session_count,
         "next_session_index": session_count + 1,
-        "created_at": project.created_at.isoformat() if project.created_at else None,
-        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+        "created_at": isoformat_utc(project.created_at),
+        "updated_at": isoformat_utc(project.updated_at),
     }
 
 
@@ -575,6 +572,10 @@ async def add_performance_samples_batch(
         upload_session.get("productName"),
     )
     unity_version = upload_session.get("unityVersion")
+    upload_platform = upload_session.get("platform")
+    upload_runtime_mode = upload_session.get("runtimeMode")
+    upload_graphics_api = upload_session.get("graphicsApi")
+    upload_render_pipeline = upload_session.get("renderPipeline")
 
     device_info = first_device_info
     if device_info:
@@ -585,6 +586,21 @@ async def add_performance_samples_batch(
             first_sample.get("xrDeviceName"),
         )
         session.os_version = _first_value(session.os_version, device_info.get("operatingSystem"))
+        session.xr_runtime = _first_value(
+            session.xr_runtime,
+            upload_session.get("xrRuntime"),
+            device_info.get("xrRuntime"),
+            " / ".join(
+                str(part)
+                for part in [
+                    upload_runtime_mode or "Unity",
+                    upload_platform,
+                    upload_graphics_api or device_info.get("graphicsDeviceType"),
+                ]
+                if part
+            )
+            or None,
+        )
         _merge_session_config(
             session,
             {
@@ -596,6 +612,7 @@ async def add_performance_samples_batch(
                 "gpu_model": device_info.get("graphicsDeviceName"),
                 "gpu_vendor": device_info.get("graphicsDeviceVendor"),
                 "gpu_version": device_info.get("graphicsDeviceVersion"),
+                "graphics_api": upload_graphics_api or device_info.get("graphicsDeviceType"),
                 "gpu_memory_mb": device_info.get("graphicsMemorySize"),
                 "system_memory_mb": device_info.get("systemMemorySize"),
                 "ram_gb": round(device_info.get("systemMemorySize", 0) / 1024, 2)
@@ -603,12 +620,35 @@ async def add_performance_samples_batch(
                 else None,
                 "screen_resolution": device_info.get("screenResolution") or first_sample.get("screenResolution"),
                 "unity_version": unity_version,
+                "engine": f"Unity {unity_version}" if unity_version else "Unity",
+                "platform": upload_platform or device_info.get("applicationPlatform"),
+                "runtime_mode": upload_runtime_mode or device_info.get("runtimeMode"),
+                "render_pipeline": upload_render_pipeline or device_info.get("renderPipeline"),
+                "xr_runtime": session.xr_runtime,
                 "xr_device_name": first_sample.get("xrDeviceName"),
                 "sample_count": len(objects),
             },
         )
     else:
-        _merge_session_config(session, {"sample_count": len(objects), "unity_version": unity_version})
+        session.xr_runtime = _first_value(
+            session.xr_runtime,
+            upload_session.get("xrRuntime"),
+            " / ".join(str(part) for part in [upload_runtime_mode or "Unity", upload_platform, upload_graphics_api] if part)
+            or None,
+        )
+        _merge_session_config(
+            session,
+            {
+                "sample_count": len(objects),
+                "unity_version": unity_version,
+                "engine": f"Unity {unity_version}" if unity_version else "Unity",
+                "platform": upload_platform,
+                "runtime_mode": upload_runtime_mode,
+                "graphics_api": upload_graphics_api,
+                "render_pipeline": upload_render_pipeline,
+                "xr_runtime": session.xr_runtime,
+            },
+        )
 
     db.commit()
 
@@ -617,8 +657,8 @@ async def add_performance_samples_batch(
         "inserted": len(objects),
         "session_id": session_id,
         "status": session.status.value if hasattr(session.status, "value") else session.status,
-        "started_at": session.started_at.isoformat() if session.started_at else None,
-        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "started_at": isoformat_utc(session.started_at),
+        "ended_at": isoformat_utc(session.ended_at),
         "duration_seconds": session.duration_seconds,
     }
 

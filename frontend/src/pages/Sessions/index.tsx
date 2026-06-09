@@ -25,6 +25,7 @@ import {
 } from '@ant-design/icons';
 import type { TestSession } from '@/types';
 import { sessionsApi } from '@/api/sessions';
+import { formatDateTime, getApiDateTime } from '@/lib/datetime';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -306,8 +307,9 @@ const Sessions: React.FC = () => {
       return `${mins}分${secs}秒`;
     }
     if (!start) return '-';
-    const startTime = new Date(start).getTime();
-    const endTime = end ? new Date(end).getTime() : Date.now();
+    const startTime = getApiDateTime(start);
+    const endTime = end ? getApiDateTime(end) : Date.now();
+    if (startTime === null || endTime === null) return '-';
     const diff = Math.floor((endTime - startTime) / 1000);
     const mins = Math.floor(diff / 60);
     const secs = diff % 60;
@@ -365,13 +367,13 @@ const Sessions: React.FC = () => {
       title: '开始时间',
       dataIndex: 'start_time',
       key: 'start_time',
-      render: (time: string | undefined) => time ? new Date(time).toLocaleString('zh-CN') : '-',
+      render: (time: string | undefined) => formatDateTime(time),
     },
     {
       title: '结束时间',
       dataIndex: 'end_time',
       key: 'end_time',
-      render: (time: string | null | undefined) => time ? new Date(time).toLocaleString('zh-CN') : '-',
+      render: (time: string | null | undefined) => formatDateTime(time),
     },
     {
       title: '耗时',
@@ -473,12 +475,12 @@ const Sessions: React.FC = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="开始时间">
                   {selectedSession.start_time
-                    ? new Date(selectedSession.start_time).toLocaleString('zh-CN')
+                    ? formatDateTime(selectedSession.start_time)
                     : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="结束时间">
                   {selectedSession.end_time
-                    ? new Date(selectedSession.end_time).toLocaleString('zh-CN')
+                    ? formatDateTime(selectedSession.end_time)
                     : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="耗时">
@@ -525,7 +527,7 @@ const Sessions: React.FC = () => {
                 items={[
                   {
                     dot: <PlayCircleOutlined style={{ color: '#10b981' }} />,
-                    children: `测试开始 - ${selectedSession.start_time ? new Date(selectedSession.start_time).toLocaleString('zh-CN') : '-'}`,
+                    children: `测试开始 - ${formatDateTime(selectedSession.start_time)}`,
                   },
                   {
                     dot: <ClockCircleOutlined style={{ color: '#3b82f6' }} />,
@@ -546,9 +548,9 @@ const Sessions: React.FC = () => {
                       ),
                     children:
                       selectedSession.status === 'completed'
-                        ? `测试完成 - ${selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString('zh-CN') : ''}`
+                        ? `测试完成 - ${formatDateTime(selectedSession.end_time)}`
                         : selectedSession.status === 'failed'
-                        ? `测试失败 - ${selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString('zh-CN') : ''}`
+                        ? `测试失败 - ${formatDateTime(selectedSession.end_time)}`
                         : '测试中...',
                   },
                 ]}

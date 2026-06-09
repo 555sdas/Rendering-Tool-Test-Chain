@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using XRDataCollector.Core;
 using XRDataCollector.Data;
 
 namespace XRDataCollector.Collectors
@@ -23,16 +24,26 @@ namespace XRDataCollector.Collectors
         private int renderTextureCount;
         private int rigidbodyCount;
         private int colliderCount;
+        private readonly XRTestConfig config;
 
         public string CollectorName => "RenderQuality";
+
+        public RenderQualityCollector(XRTestConfig config = null)
+        {
+            this.config = config;
+        }
 
         public void StartCollecting()
         {
             ResetMetrics();
-            CollectLightingMetrics();
-            CollectMaterialMetrics();
-            CollectPostProcessingMetrics();
-            CollectPhysicsMetrics();
+            if (config == null || config.testLightingQuality)
+                CollectLightingMetrics();
+            if (config == null || config.testMaterialQuality)
+                CollectMaterialMetrics();
+            if (config == null || config.testPostProcessingQuality)
+                CollectPostProcessingMetrics();
+            if (config == null || config.testPhysicsQuality)
+                CollectPhysicsMetrics();
         }
 
         public void StopCollecting()
@@ -56,17 +67,37 @@ namespace XRDataCollector.Collectors
 
         private void ResetMetrics()
         {
-            activeLightCount = 0;
-            realtimeLightCount = 0;
-            shadowCasterCount = 0;
-            reflectionProbeCount = 0;
-            materialCount = 0;
-            uniqueMaterialCount = 0;
-            transparentMaterialCount = 0;
-            postProcessVolumeCount = 0;
-            renderTextureCount = 0;
-            rigidbodyCount = 0;
-            colliderCount = 0;
+            activeLightCount = IsLightingEnabled() ? 0 : -1;
+            realtimeLightCount = IsLightingEnabled() ? 0 : -1;
+            shadowCasterCount = IsLightingEnabled() ? 0 : -1;
+            reflectionProbeCount = IsLightingEnabled() ? 0 : -1;
+            materialCount = IsMaterialEnabled() ? 0 : -1;
+            uniqueMaterialCount = IsMaterialEnabled() ? 0 : -1;
+            transparentMaterialCount = IsMaterialEnabled() ? 0 : -1;
+            postProcessVolumeCount = IsPostProcessingEnabled() ? 0 : -1;
+            renderTextureCount = IsPostProcessingEnabled() ? 0 : -1;
+            rigidbodyCount = IsPhysicsEnabled() ? 0 : -1;
+            colliderCount = IsPhysicsEnabled() ? 0 : -1;
+        }
+
+        private bool IsLightingEnabled()
+        {
+            return config == null || config.testLightingQuality;
+        }
+
+        private bool IsMaterialEnabled()
+        {
+            return config == null || config.testMaterialQuality;
+        }
+
+        private bool IsPostProcessingEnabled()
+        {
+            return config == null || config.testPostProcessingQuality;
+        }
+
+        private bool IsPhysicsEnabled()
+        {
+            return config == null || config.testPhysicsQuality;
         }
 
         private void CollectLightingMetrics()

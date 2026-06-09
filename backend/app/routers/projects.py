@@ -10,6 +10,7 @@ from app.models.project import Project, ProjectStatus, ProjectType
 from app.models.test_session import TestSession
 from app.core.permissions import Permission, require_permission, get_current_user
 from app.services.audit_service import log_audit
+from app.utils.datetime import isoformat_utc
 
 router = APIRouter(prefix="/projects", tags=["项目管理"])
 
@@ -56,11 +57,11 @@ def _session_response(session: TestSession) -> dict:
         "user_id": session.user_id,
         "project_id": session.project_id,
         "config": session.config,
-        "started_at": session.started_at.isoformat() if session.started_at else None,
-        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "started_at": isoformat_utc(session.started_at),
+        "ended_at": isoformat_utc(session.ended_at),
         "duration_seconds": session.duration_seconds,
-        "created_at": session.created_at.isoformat() if session.created_at else None,
-        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "created_at": isoformat_utc(session.created_at),
+        "updated_at": isoformat_utc(session.updated_at),
     }
 
 

@@ -8,6 +8,7 @@ from app.routers.test_reports import router as test_reports_router
 from app.routers.exports import router as exports_router
 from app.routers.audit_logs import router as audit_logs_router
 from app.routers.cloud_ar import router as cloud_ar_router
+from app.routers.unity_runner import router as unity_runner_router
 
 __all__ = [
     "auth_router",
@@ -20,4 +21,5 @@ __all__ = [
     "exports_router",
     "audit_logs_router",
     "cloud_ar_router",
+    "unity_runner_router",
 ]

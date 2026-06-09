@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     DEVICE_TOKEN: str = "xr-device-token-default"
     DEVICE_TOKEN_USERNAME: str = "admin"
 
+    UNITY_RUNNER_PLATFORM_BASE_URL: str = "http://localhost:8002/api/v1"
+    UNITY_RUNNER_RESOURCE_DIR: str = "./resources"
+    UNITY_RUNNER_TASK_DIR: str = "./runtime/unity_tasks"
+    UNITY_RUNNER_LOG_DIR: str = "./runtime/unity_logs"
+
     PASSWORD_MIN_LENGTH: int = 8
     MAX_LOGIN_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 30

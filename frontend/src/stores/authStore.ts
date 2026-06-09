@@ -5,16 +5,19 @@ import { LoginRequest, UserInfo } from '@/types';
 function loadAuthFromStorage(): { token: string | null; user: UserInfo | null } {
   const token = localStorage.getItem('xr_token');
   const userStr = localStorage.getItem('xr_user');
-  if (token && userStr) {
+  if (!token) {
+    return { token: null, user: null };
+  }
+
+  if (userStr && userStr !== 'undefined' && userStr !== 'null') {
     try {
       return { token, user: JSON.parse(userStr) as UserInfo };
     } catch {
-      localStorage.removeItem('xr_token');
       localStorage.removeItem('xr_user');
-      localStorage.removeItem('xr_refresh_token');
     }
   }
-  return { token: null, user: null };
+
+  return { token, user: null };
 }
 
 const { token: savedToken, user: savedUser } = loadAuthFromStorage();
@@ -44,10 +47,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const response = await authApi.login(credentials);
       localStorage.setItem('xr_token', response.access_token);
       localStorage.setItem('xr_refresh_token', response.refresh_token);
-      localStorage.setItem('xr_user', JSON.stringify(response.user));
+      if (response.user) {
+        localStorage.setItem('xr_user', JSON.stringify(response.user));
+      } else {
+        localStorage.removeItem('xr_user');
+      }
       set({
         token: response.access_token,
-        user: response.user,
+        user: response.user || null,
         isAuthenticated: true,
         isLoading: false,
       });

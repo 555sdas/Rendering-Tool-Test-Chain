@@ -8,6 +8,7 @@ from app.models.performance_sample import PerformanceSample
 from app.models.test_session import TestSession
 from app.models.threshold_rule import ThresholdRule
 from app.services.render_quality_service import RenderQualityService
+from app.utils.datetime import isoformat_utc
 
 
 class PerformanceAnalysisService:
@@ -235,8 +236,8 @@ class PerformanceAnalysisService:
                 "xr_runtime": session.xr_runtime,
                 "app_version": session.app_version,
                 "config": session.config,
-                "started_at": session.started_at.isoformat() if session.started_at else None,
-                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "started_at": isoformat_utc(session.started_at),
+                "ended_at": isoformat_utc(session.ended_at),
                 "duration_seconds": session.duration_seconds,
             },
             "fps_analysis": self.get_fps_analysis(test_session_id),

@@ -20,6 +20,7 @@ import {
 } from 'recharts';
 import { projectsApi } from '@/api/projects';
 import { sessionsApi, type TestSession } from '@/api/sessions';
+import { formatDateTime, parseApiDate } from '@/lib/datetime';
 
 const PIE_COLORS = ['#10b981', '#ef4444', '#3b82f6', '#f59e0b'];
 
@@ -63,8 +64,7 @@ const columns = [
     title: '开始时间',
     dataIndex: 'started_at',
     key: 'started_at',
-    render: (v: string | null) =>
-      v ? new Date(v).toLocaleString('zh-CN') : '-',
+    render: (v: string | null) => formatDateTime(v),
   },
 ];
 
@@ -79,7 +79,8 @@ function buildTrendData(sessions: TestSession[]): { date: string; count: number 
   }
   sessions.forEach((s) => {
     if (s.created_at) {
-      const d = new Date(s.created_at);
+      const d = parseApiDate(s.created_at);
+      if (!d) return;
       const key = `${d.getMonth() + 1}-${d.getDate()}`;
       if (days[key] !== undefined) days[key]++;
     }

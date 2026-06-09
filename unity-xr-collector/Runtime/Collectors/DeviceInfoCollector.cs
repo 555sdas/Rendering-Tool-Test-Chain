@@ -69,12 +69,17 @@ namespace XRDataCollector.Collectors
                 deviceName = SystemInfo.deviceName,
                 deviceType = SystemInfo.deviceType.ToString(),
                 operatingSystem = SystemInfo.operatingSystem,
+                unityVersion = Application.unityVersion,
+                applicationPlatform = Application.platform.ToString(),
+                runtimeMode = Application.isEditor ? "Unity Editor" : "Unity Player",
+                renderPipeline = GetRenderPipelineName(),
                 processorType = SystemInfo.processorType,
                 processorCount = SystemInfo.processorCount,
                 systemMemorySize = SystemInfo.systemMemorySize,
                 graphicsDeviceName = SystemInfo.graphicsDeviceName,
                 graphicsDeviceVendor = SystemInfo.graphicsDeviceVendor,
                 graphicsDeviceVersion = SystemInfo.graphicsDeviceVersion,
+                graphicsDeviceType = SystemInfo.graphicsDeviceType.ToString(),
                 graphicsMemorySize = SystemInfo.graphicsMemorySize,
                 graphicsShaderLevel = SystemInfo.graphicsShaderLevel,
                 maxTextureSize = SystemInfo.maxTextureSize,
@@ -88,6 +93,12 @@ namespace XRDataCollector.Collectors
             };
 
             return info;
+        }
+
+        private string GetRenderPipelineName()
+        {
+            var pipeline = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+            return pipeline != null ? pipeline.GetType().Name : "Built-in Render Pipeline";
         }
 
         #endregion
