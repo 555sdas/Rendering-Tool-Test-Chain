@@ -64,7 +64,8 @@ export interface RenderQualityCategory {
   key: string;
   name: string;
   weight: number;
-  score: number;
+  score: number | null;
+  tested?: boolean;
   status: string;
   metrics: Record<string, number | string | null>;
   deductions: Array<{
@@ -81,7 +82,7 @@ export interface RenderQualityAssessment {
     type: string;
     description: string;
   };
-  overall_score: number;
+  overall_score: number | null;
   grade: string;
   categories: RenderQualityCategory[];
   rubric: Record<string, string>;
@@ -90,6 +91,8 @@ export interface RenderQualityAssessment {
     scene_asset: string | null;
     has_reference_frame_metrics: boolean;
     has_runtime_quality_metrics: boolean;
+    enabled_quality_checks?: Record<string, boolean>;
+    tested_category_count?: number;
     note: string;
   };
 }

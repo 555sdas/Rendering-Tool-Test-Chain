@@ -89,6 +89,20 @@ class ReportGenerationService:
                 value = f"{value:.2f}"
             return f"<tr><th>{html.escape(name)}</th><td>{html.escape(str(value))}{html.escape(unit)}</td></tr>"
 
+        def quality_score_text(category: dict) -> str:
+            score = category.get("score")
+            if category.get("tested") is False or score is None:
+                return "未测试"
+            if isinstance(score, float):
+                return f"{score:.2f}"
+            return str(score)
+
+        def quality_deductions_text(category: dict) -> str:
+            if category.get("tested") is False:
+                return "本次未勾选，不参与评分"
+            deductions = category.get("deductions", [])
+            return "; ".join(d.get("reason", "") for d in deductions) or "无明显扣分项"
+
         violation_rows = "\n".join(
             "<tr>"
             f"<td>{html.escape(str(v.get('rule_name', '-')))}</td>"
@@ -103,9 +117,9 @@ class ReportGenerationService:
         quality_rows = "\n".join(
             "<tr>"
             f"<td>{html.escape(str(c.get('name', '-')))}</td>"
-            f"<td>{html.escape(str(c.get('score', '-')))}</td>"
+            f"<td>{html.escape(quality_score_text(c))}</td>"
             f"<td>{html.escape(str(c.get('status', '-')))}</td>"
-            f"<td>{html.escape('; '.join(d.get('reason', '') for d in c.get('deductions', [])) or '无明显扣分项')}</td>"
+            f"<td>{html.escape(quality_deductions_text(c))}</td>"
             f"<td>{html.escape('; '.join(c.get('recommendations', [])[:2]))}</td>"
             "</tr>"
             for c in quality_categories

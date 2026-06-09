@@ -16,8 +16,9 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
+import { reportsApi } from '@/api/reports';
 import { sessionsApi, type PerformanceSample, type TestSession } from '@/api/sessions';
 import { getConfigNumber, getConfigString } from '@/lib/sessionConfig';
 
@@ -74,6 +75,24 @@ const fallbackSessionOptions = [
   { value: 'session3', label: 'PICO 4 - 协同场景' },
 ];
 
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildReportFilename(sessionId: number, sessionName?: string | null) {
+  const baseName = (sessionName || `session_${sessionId}_render_report`)
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .trim();
+  return `${baseName || `session_${sessionId}_render_report`}.html`;
+}
+
 const Analysis: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -86,6 +105,7 @@ const Analysis: React.FC = () => {
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<TestSession | null>(null);
   const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
+  const [exportingReport, setExportingReport] = useState(false);
 
   useEffect(() => {
     const loadSessions = async () => {
@@ -151,6 +171,31 @@ const Analysis: React.FC = () => {
     ['graphics_api', 'graphicsApi', 'graphicsDeviceType'],
     getReportString(['gpu_version', 'graphicsDeviceVersion']),
   );
+  const selectedSessionId = Number(selectedSessions[0]);
+  const canExportReport = Number.isFinite(selectedSessionId);
+
+  const handleExportReport = async () => {
+    if (!canExportReport) {
+      message.warning('请先选择一个后端测试会话');
+      return;
+    }
+
+    setExportingReport(true);
+    try {
+      const title = `${selectedSessionDetail?.name || fullReport?.session_info.name || `会话 ${selectedSessionId}`} 渲染测试报告`;
+      const report = await reportsApi.generateFromSession(selectedSessionId, {
+        title,
+        description: 'Web 端导出的渲染结果报告',
+      });
+      const { blob, filename } = await reportsApi.download(report.id);
+      saveBlob(blob, filename || buildReportFilename(selectedSessionId, selectedSessionDetail?.name));
+      message.success('报表已导出');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '报表导出失败');
+    } finally {
+      setExportingReport(false);
+    }
+  };
 
   const comparisonColumns = [
     {
@@ -211,7 +256,11 @@ const Analysis: React.FC = () => {
       dataIndex: 'score',
       key: 'score',
       width: 180,
-      render: (value: number) => <Progress percent={Math.round(value)} size="small" />,
+      render: (value: number | null, record: RenderQualityCategory) => (
+        record.tested === false || value === null || value === undefined
+          ? <Tag color="default">未测试</Tag>
+          : <Progress percent={Math.round(value)} size="small" />
+      ),
     },
     {
       title: '状态',
@@ -219,7 +268,7 @@ const Analysis: React.FC = () => {
       key: 'status',
       width: 100,
       render: (value: string) => {
-        const color = value === '通过' ? 'green' : value === '需关注' ? 'orange' : 'red';
+        const color = value === '通过' ? 'green' : value === '需关注' ? 'orange' : value === '未测试' ? 'default' : 'red';
         return <Tag color={color}>{value}</Tag>;
       },
     },
@@ -243,7 +292,7 @@ const Analysis: React.FC = () => {
         <span>
           {record.deductions.length
             ? record.deductions.map((item) => `${item.reason}(-${item.points})`).join('；')
-            : '无明显扣分项'}
+            : record.tested === false ? '本次未勾选，不参与评分' : '无明显扣分项'}
         </span>
       ),
     },
@@ -263,19 +312,29 @@ const Analysis: React.FC = () => {
           <h2 style={{ margin: 0 }}>性能分析</h2>
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
         </Space>
-        <Select
-          mode="multiple"
-          placeholder="选择对比会话"
-          value={selectedSessions}
-          onChange={setSelectedSessions}
-          style={{ width: 400 }}
-        >
-          {sessionOptions.map((opt) => (
-            <Option key={opt.value} value={opt.value}>
-              {opt.label}
-            </Option>
-          ))}
-        </Select>
+        <Space>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exportingReport}
+            disabled={!canExportReport}
+            onClick={handleExportReport}
+          >
+            导出报表
+          </Button>
+          <Select
+            mode="multiple"
+            placeholder="选择对比会话"
+            value={selectedSessions}
+            onChange={setSelectedSessions}
+            style={{ width: 400 }}
+          >
+            {sessionOptions.map((opt) => (
+              <Option key={opt.value} value={opt.value}>
+                {opt.label}
+              </Option>
+            ))}
+          </Select>
+        </Space>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
@@ -395,7 +454,12 @@ const Analysis: React.FC = () => {
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={24} sm={8}>
               <Card>
-                <Statistic title="总体质量分" value={renderQuality?.overall_score ?? 0} precision={1} suffix="/ 100" />
+                <Statistic
+                  title="总体质量分"
+                  value={renderQuality?.overall_score ?? '未测试'}
+                  precision={renderQuality?.overall_score == null ? undefined : 1}
+                  suffix={renderQuality?.overall_score == null ? '' : '/ 100'}
+                />
               </Card>
             </Col>
             <Col xs={24} sm={8}>

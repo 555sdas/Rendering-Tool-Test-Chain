@@ -1,6 +1,8 @@
+import os
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel, Field
@@ -53,6 +55,19 @@ class TestReportResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _report_media_type(report_format: str | ReportFormat | None) -> str:
+    value = getattr(report_format, "value", report_format)
+    if value == ReportFormat.HTML.value:
+        return "text/html; charset=utf-8"
+    if value == ReportFormat.EXCEL.value:
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if value == ReportFormat.WORD.value:
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if value == ReportFormat.PDF.value:
+        return "application/pdf"
+    return "application/octet-stream"
 
 
 @router.get("", response_model=list[TestReportResponse])
@@ -115,6 +130,39 @@ async def create_test_report(
     )
 
     return report
+
+
+@router.get("/{report_id}/download")
+async def download_test_report(
+    report_id: int,
+    current_user: User = Depends(require_permission(Permission.REPORT_VIEW)),
+    db: Session = Depends(get_db),
+):
+    report = db.query(TestReport).filter(TestReport.id == report_id).first()
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="测试报告不存在",
+        )
+
+    if not report.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="测试报告尚未生成文件",
+        )
+
+    file_path = os.path.abspath(report.file_path)
+    if not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="测试报告文件不存在",
+        )
+
+    return FileResponse(
+        path=file_path,
+        filename=os.path.basename(file_path),
+        media_type=_report_media_type(report.format),
+    )
 
 
 @router.post("/generate-from-session/{session_id}", response_model=TestReportResponse)

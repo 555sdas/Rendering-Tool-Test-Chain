@@ -44,25 +44,27 @@ class RenderQualityService:
             scene = self.db.query(SceneAsset).filter(SceneAsset.id == session.scene_id).first()
 
         stats = self._build_stats(samples, scene)
+        enabled_checks = self._enabled_quality_checks(session)
         categories = [
-            self._evaluate_lighting(stats),
-            self._evaluate_material(stats),
-            self._evaluate_post_processing(stats),
-            self._evaluate_physics(stats),
+            self._evaluate_lighting(stats) if enabled_checks["lighting"] else self._untested_category("lighting", "光照与阴影"),
+            self._evaluate_material(stats) if enabled_checks["material"] else self._untested_category("material", "材质与纹理"),
+            self._evaluate_post_processing(stats) if enabled_checks["post_processing"] else self._untested_category("post_processing", "后处理与画面一致性"),
+            self._evaluate_physics(stats) if enabled_checks["physics"] else self._untested_category("physics", "物理仿真与虚实融合"),
         ]
-        total_weight = sum(c["weight"] for c in categories)
+        scored_categories = [c for c in categories if c.get("tested") and c.get("score") is not None]
+        total_weight = sum(c["weight"] for c in scored_categories)
         overall = (
-            sum(c["score"] * c["weight"] for c in categories) / total_weight
+            sum(c["score"] * c["weight"] for c in scored_categories) / total_weight
             if total_weight
-            else 0
+            else None
         )
 
         return {
             "session_id": session.id,
             "session_name": session.name,
             "evaluation_mode": self._evaluation_mode(session, samples),
-            "overall_score": round(overall, 2),
-            "grade": self._grade(overall),
+            "overall_score": round(overall, 2) if overall is not None else None,
+            "grade": self._grade(overall) if overall is not None else "未测试",
             "categories": categories,
             "rubric": {
                 "lighting": "光源/阴影复杂度、曝光异常、光照闪烁、GPU与长帧风险。",
@@ -75,8 +77,34 @@ class RenderQualityService:
                 "scene_asset": scene.name if scene else None,
                 "has_reference_frame_metrics": bool(stats["reference_metrics_present"]),
                 "has_runtime_quality_metrics": bool(stats["runtime_quality_metrics_present"]),
+                "enabled_quality_checks": enabled_checks,
+                "tested_category_count": len(scored_categories),
                 "note": "若没有SSIM/PSNR/DeltaE或专家复核输入，本分数只代表预测试风险，不代表最终画质认证。",
             },
+        }
+
+    def _enabled_quality_checks(self, session: TestSession) -> dict[str, bool]:
+        config = session.config or {}
+        raw = config.get("quality_checks") or config.get("qualityChecks")
+        if not isinstance(raw, dict):
+            return {
+                "lighting": True,
+                "material": True,
+                "post_processing": True,
+                "physics": True,
+            }
+
+        def enabled(*keys: str) -> bool:
+            for key in keys:
+                if key in raw:
+                    return bool(raw[key])
+            return True
+
+        return {
+            "lighting": enabled("lighting"),
+            "material": enabled("material", "materials"),
+            "post_processing": enabled("post_processing", "postProcessing"),
+            "physics": enabled("physics"),
         }
 
     def _build_stats(self, samples: list[PerformanceSample], scene: SceneAsset | None) -> dict[str, Any]:
@@ -159,7 +187,7 @@ class RenderQualityService:
                     continue
                 for name in metric_names:
                     value = group.get(name)
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, (int, float)) and value >= 0:
                         values[name].append(float(value))
 
                 if group.get("lighting_flicker") or group.get("shadow_flicker"):
@@ -371,10 +399,24 @@ class RenderQualityService:
             "name": name,
             "weight": self.CATEGORY_WEIGHTS[key],
             "score": round(score, 2),
+            "tested": True,
             "status": self._status(score),
             "metrics": {k: self._round_metric(v) for k, v in metrics.items()},
             "deductions": deductions,
             "recommendations": recommendations,
+        }
+
+    def _untested_category(self, key: str, name: str) -> dict[str, Any]:
+        return {
+            "key": key,
+            "name": name,
+            "weight": 0,
+            "score": None,
+            "tested": False,
+            "status": "未测试",
+            "metrics": {},
+            "deductions": [],
+            "recommendations": ["该维度未在本次任务中勾选，未参与总体质量分计算。"],
         }
 
     def _evaluation_mode(self, session: TestSession, samples: list[PerformanceSample]) -> dict[str, str]:
