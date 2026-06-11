@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -15,6 +15,7 @@ import {
   Alert,
   Space,
   Progress,
+  Collapse,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -25,6 +26,7 @@ import {
   LoadingOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { projectsApi, type Project } from '@/api/projects';
 import { unityRunnerApi, type UnityEngineResource, type UnitySceneResource } from '@/api/unityRunner';
@@ -53,6 +55,66 @@ const TERMINAL_SESSION_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const DEFAULT_LAUNCH_SECONDS = 6;
 const DEFAULT_UPLOAD_SECONDS = 8;
 
+const METRIC_CHECK_OPTIONS = [
+  { value: 'frame_rate', title: 'FPS', detail: '平均帧率、最低帧率、掉帧趋势' },
+  { value: 'frame_time', title: '帧时间', detail: 'P95/P99 帧时间、长帧风险' },
+  { value: 'cpu', title: 'CPU', detail: 'CPU 占用、主线程压力估算' },
+  { value: 'gpu', title: 'GPU / 渲染统计', detail: 'GPU 占用、Draw Call、三角面、SetPass' },
+  { value: 'memory', title: '内存', detail: '总内存、托管堆、显存与渲染纹理' },
+  { value: 'device_info', title: '设备信息', detail: 'CPU/GPU 型号、系统内存、Unity 与图形 API' },
+];
+const DEFAULT_METRIC_CHECKS = METRIC_CHECK_OPTIONS.map((item) => item.value);
+
+const QUALITY_CHECK_GROUPS = [
+  {
+    key: 'lighting',
+    title: '光照与阴影',
+    options: [
+      { value: 'lighting.active_lights', title: '活动光源数量', detail: '统计场景中启用的 Light 数量' },
+      { value: 'lighting.realtime_lights', title: '实时光源数量', detail: '识别 Realtime 光源带来的实时光照成本' },
+      { value: 'lighting.shadow_casters', title: '阴影投射数量', detail: '统计开启阴影投射的 Renderer 数量' },
+      { value: 'lighting.reflection_probes', title: '反射探针数量', detail: '检查 Reflection Probe 规模' },
+      { value: 'lighting.exposure_artifacts', title: '曝光/闪烁异常', detail: '评估曝光波动、过曝、欠曝和阴影闪烁标记' },
+    ],
+  },
+  {
+    key: 'materials',
+    title: '材质与纹理',
+    options: [
+      { value: 'materials.material_slots', title: '材质槽数量', detail: '统计 Renderer 绑定的材质槽总量' },
+      { value: 'materials.unique_materials', title: '唯一材质数量', detail: '评估材质复用和批处理友好度' },
+      { value: 'materials.transparent_materials', title: '透明材质数量', detail: '定位透明排序和过绘制风险' },
+      { value: 'materials.draw_calls', title: 'Draw Call / SetPass', detail: '结合运行时渲染批次评估材质切换成本' },
+      { value: 'materials.texture_memory', title: '纹理内存', detail: '评估贴图尺寸、压缩和纹理流送压力' },
+    ],
+  },
+  {
+    key: 'post_processing',
+    title: '后处理',
+    options: [
+      { value: 'post_processing.volumes', title: 'Volume 数量', detail: '统计后处理 Volume 规模' },
+      { value: 'post_processing.render_textures', title: 'RenderTexture 数量', detail: '统计运行时 RenderTexture 资源数量' },
+      { value: 'post_processing.render_texture_memory', title: '渲染纹理内存', detail: '评估后处理和中间纹理内存压力' },
+      { value: 'post_processing.gpu_frame_budget', title: 'GPU 帧预算', detail: '结合 GPU 占用和 P95 帧时间判断后处理成本' },
+      { value: 'post_processing.warnings', title: '后处理异常标记', detail: '接收画面偏色、模糊、抗锯齿等异常标记' },
+    ],
+  },
+  {
+    key: 'physics',
+    title: '物理仿真',
+    options: [
+      { value: 'physics.rigidbodies', title: '刚体数量', detail: '统计 Rigidbody 规模和动态物理压力' },
+      { value: 'physics.colliders', title: '碰撞体数量', detail: '统计 Collider 数量和碰撞层复杂度' },
+      { value: 'physics.penetration', title: '穿模/碰撞异常', detail: '接收穿模、碰撞异常、物理告警标记' },
+      { value: 'physics.pose_latency', title: '姿态/交互延迟', detail: '评估虚实融合交互响应延迟' },
+      { value: 'physics.prediction_error', title: '预测误差', detail: '评估 XR 姿态预测误差风险' },
+      { value: 'physics.long_frames', title: '物理相关长帧', detail: '结合长帧数量排查物理/动画/脚本峰值' },
+    ],
+  },
+];
+
+const DEFAULT_QUALITY_DETAIL_CHECKS = QUALITY_CHECK_GROUPS.flatMap((group) => group.options.map((item) => item.value));
+
 interface ActiveUnityRun {
   taskId: number | null;
   sessionId: number;
@@ -79,6 +141,13 @@ interface EstimatedRunProgress {
   icon: React.ReactNode;
 }
 
+interface StageLog {
+  key: string;
+  time: string;
+  text: string;
+  tone?: 'info' | 'success' | 'warning' | 'error';
+}
+
 function getConfigNumber(config: Record<string, unknown> | null | undefined, key: string, fallback: number): number {
   const value = config?.[key];
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -99,6 +168,31 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(safeSeconds / 60);
   const rest = safeSeconds % 60;
   return minutes > 0 ? `${minutes}分${rest}秒` : `${rest}秒`;
+}
+
+function formatSelectedLabels(values: string[] | undefined, options: Array<{ value: string; title: string }>): string {
+  if (!values?.length) return '未选择';
+  const labels = new Map(options.map((item) => [item.value, item.title]));
+  return values.map((value) => labels.get(value) || value).join('、');
+}
+
+function formatStageTime(): string {
+  return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function buildQualityCategoryChecks(values: string[] | undefined) {
+  const selected = new Set(values || []);
+  return {
+    lighting: QUALITY_CHECK_GROUPS.find((group) => group.key === 'lighting')?.options.some((item) => selected.has(item.value)) ?? false,
+    materials: QUALITY_CHECK_GROUPS.find((group) => group.key === 'materials')?.options.some((item) => selected.has(item.value)) ?? false,
+    post_processing: QUALITY_CHECK_GROUPS.find((group) => group.key === 'post_processing')?.options.some((item) => selected.has(item.value)) ?? false,
+    physics: QUALITY_CHECK_GROUPS.find((group) => group.key === 'physics')?.options.some((item) => selected.has(item.value)) ?? false,
+  };
+}
+
+function buildQualityDetailChecks(values: string[] | undefined): Record<string, boolean> {
+  const selected = new Set(values || []);
+  return Object.fromEntries(DEFAULT_QUALITY_DETAIL_CHECKS.map((key) => [key, selected.has(key)]));
 }
 
 function createActiveRunFromSession(
@@ -203,15 +297,28 @@ const ProjectDetail: React.FC = () => {
   const [scenes, setScenes] = useState<UnitySceneResource[]>([]);
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [activeRun, setActiveRun] = useState<ActiveUnityRun | null>(null);
+  const [stageLogs, setStageLogs] = useState<StageLog[]>([
+    { key: 'idle', time: formatStageTime(), text: '等待启动 Unity 测试。', tone: 'info' },
+  ]);
   const [now, setNow] = useState(Date.now());
+  const loggedStageKeysRef = useRef<Set<string>>(new Set(['idle']));
+  const logBodyRef = useRef<HTMLDivElement | null>(null);
   const [form] = Form.useForm();
+  const activeEstimate = activeRun ? getEstimatedRunProgress(activeRun, now) : null;
 
   const loadSessions = useCallback(async () => {
     if (!projectId) return;
     const sessionsData = await projectsApi.listSessions(Number(projectId));
     setSessions(sessionsData.items || []);
   }, [projectId]);
+
+  const appendStageLog = useCallback((key: string, text: string, tone: StageLog['tone'] = 'info') => {
+    if (loggedStageKeysRef.current.has(key)) return;
+    loggedStageKeysRef.current.add(key);
+    setStageLogs((current) => [...current, { key, time: formatStageTime(), text, tone }].slice(-80));
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -239,7 +346,8 @@ const ProjectDetail: React.FC = () => {
           metrics_duration_seconds: 30,
           batchmode: false,
           ensure_plugin: true,
-          quality_checks: ['lighting', 'materials', 'post_processing', 'physics'],
+          metric_checks: DEFAULT_METRIC_CHECKS,
+          quality_detail_checks: DEFAULT_QUALITY_DETAIL_CHECKS,
         });
       } catch {
         message.error('获取项目详情失败');
@@ -302,6 +410,41 @@ const ProjectDetail: React.FC = () => {
     return () => window.clearInterval(refreshTimer);
   }, [activeRun, loadSessions]);
 
+  useEffect(() => {
+    if (!logBodyRef.current) return;
+    logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
+  }, [stageLogs]);
+
+  useEffect(() => {
+    if (!activeRun || !activeEstimate) return;
+    const taskKey = activeRun.taskId || activeRun.sessionId;
+
+    appendStageLog(`task-${taskKey}`, `已创建测试会话 ${activeRun.sessionName}，任务 ${activeRun.taskId || '-'}。`, 'success');
+
+    if (activeRun.status === 'completed') {
+      appendStageLog(`done-${taskKey}`, '测试完成，采集数据已上传并绑定到当前会话。', 'success');
+      return;
+    }
+    if (activeRun.status === 'cancelled') {
+      appendStageLog(`cancel-${taskKey}`, '测试已停止，Unity 任务和会话已取消。', 'warning');
+      return;
+    }
+    if (activeRun.status === 'failed') {
+      appendStageLog(`failed-${taskKey}`, '测试执行失败，请检查 Unity 编辑器和后端日志。', 'error');
+      return;
+    }
+
+    if (activeEstimate.phase === 'Unity 启动中') {
+      appendStageLog(`launch-${taskKey}`, '正在启动 Unity 编辑器并加载场景资源。');
+    } else if (activeEstimate.phase === '帧率采集中') {
+      appendStageLog(`fps-${taskKey}`, `开始帧率阶段，采集 FPS 和帧时间，预计 ${formatDuration(activeRun.frameRateDurationSeconds)}。`);
+    } else if (activeEstimate.phase === '指标采集中') {
+      appendStageLog(`metrics-${taskKey}`, `开始指标阶段，采集性能项和已勾选的渲染质量子项，预计 ${formatDuration(activeRun.metricsDurationSeconds)}。`);
+    } else if (activeEstimate.phase === '上传确认中') {
+      appendStageLog(`upload-${taskKey}`, '采集阶段结束，等待 Unity 插件上传样本并刷新平台会话。');
+    }
+  }, [activeRun, activeEstimate, appendStageLog]);
+
   const handleStartUnityTest = async (values: {
     unity_engine_id: string;
     scene_resource_id: string;
@@ -310,11 +453,24 @@ const ProjectDetail: React.FC = () => {
     metrics_duration_seconds: number;
     batchmode?: boolean;
     ensure_plugin?: boolean;
-    quality_checks?: string[];
+    metric_checks?: string[];
+    quality_detail_checks?: string[];
   }) => {
     if (!projectId) return;
-    const checks = new Set(values.quality_checks || []);
+    const qualityCategoryChecks = buildQualityCategoryChecks(values.quality_detail_checks);
+    const qualityDetailChecks = buildQualityDetailChecks(values.quality_detail_checks);
+    const selectedMetricChecks = values.metric_checks ?? DEFAULT_METRIC_CHECKS;
+    const metricChecks = new Set(selectedMetricChecks);
     setLaunching(true);
+    loggedStageKeysRef.current = new Set(['prepare', 'config']);
+    setStageLogs([
+      { key: 'prepare', time: formatStageTime(), text: `准备创建 Unity 测试任务：项目 ${projectId}` },
+      {
+        key: 'config',
+        time: formatStageTime(),
+        text: `采集配置：性能项 ${formatSelectedLabels(selectedMetricChecks, METRIC_CHECK_OPTIONS)}；渲染质量子项 ${values.quality_detail_checks?.length || 0} 个。`,
+      },
+    ]);
     try {
       const result = await unityRunnerApi.startTest({
         project_id: Number(projectId),
@@ -325,12 +481,21 @@ const ProjectDetail: React.FC = () => {
         metrics_duration_seconds: values.metrics_duration_seconds,
         batchmode: Boolean(values.batchmode),
         ensure_plugin: values.ensure_plugin !== false,
-        quality_checks: {
-          lighting: checks.has('lighting'),
-          materials: checks.has('materials'),
-          post_processing: checks.has('post_processing'),
-          physics: checks.has('physics'),
+        metric_checks: {
+          frame_rate: metricChecks.has('frame_rate'),
+          frame_time: metricChecks.has('frame_time'),
+          cpu: metricChecks.has('cpu'),
+          gpu: metricChecks.has('gpu'),
+          memory: metricChecks.has('memory'),
+          device_info: metricChecks.has('device_info'),
         },
+        quality_checks: {
+          lighting: qualityCategoryChecks.lighting,
+          materials: qualityCategoryChecks.materials,
+          post_processing: qualityCategoryChecks.post_processing,
+          physics: qualityCategoryChecks.physics,
+        },
+        quality_metric_checks: qualityDetailChecks,
       });
       setActiveRun(
         createActiveRunFromSession(result.session, {
@@ -345,6 +510,7 @@ const ProjectDetail: React.FC = () => {
       );
       setNow(Date.now());
       message.success(`Unity 已启动，任务 ${result.task.id}，会话 ${result.session.name}`);
+      appendStageLog(`started-${result.task.id}`, `后端已启动 Unity 进程，PID ${result.process_id}。`, 'success');
       await loadSessions();
     } catch (error) {
       message.error(error instanceof Error ? error.message : '启动 Unity 测试失败');
@@ -353,7 +519,30 @@ const ProjectDetail: React.FC = () => {
     }
   };
 
-  const activeEstimate = activeRun ? getEstimatedRunProgress(activeRun, now) : null;
+  const handleStopUnityTest = async () => {
+    if (!activeRun?.taskId) {
+      message.warning('当前没有可停止的 Unity 任务');
+      return;
+    }
+
+    setStopping(true);
+    appendStageLog(`stop-request-${activeRun.taskId}`, '已发送停止 Unity 请求，正在终止进程。', 'warning');
+    try {
+      const result = await unityRunnerApi.stopTest(activeRun.taskId);
+      if (result.session) {
+        setActiveRun(createActiveRunFromSession(result.session, activeRun));
+      } else {
+        setActiveRun({ ...activeRun, status: 'cancelled', endedAtMs: Date.now() });
+      }
+      appendStageLog(`stop-done-${activeRun.taskId}`, 'Unity 停止完成，会话已标记为已取消。', 'warning');
+      await loadSessions();
+      message.success('Unity 停止请求已发送');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '停止 Unity 失败');
+    } finally {
+      setStopping(false);
+    }
+  };
 
   if (loading) {
     return <Spin size="large" style={{ display: 'flex', justifyContent: 'center', marginTop: 80 }} />;
@@ -463,24 +652,24 @@ const ProjectDetail: React.FC = () => {
         {activeRun && activeEstimate && (
           <div
             style={{
-              marginBottom: 20,
-              padding: 18,
-              border: '1px solid #d6e4ff',
+              marginBottom: 16,
+              padding: '12px 14px',
+              border: '1px solid #dbeafe',
               borderRadius: 8,
-              background: 'linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)',
+              background: '#f8fbff',
             }}
           >
             <div
               style={{
                 display: 'flex',
-                alignItems: 'flex-start',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 16,
-                marginBottom: 12,
+                flexWrap: 'wrap',
               }}
             >
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+              <div style={{ minWidth: 260 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 3 }}>
                   当前测试会话 {activeRun.sessionName}
                 </div>
                 <div style={{ color: '#64748b', fontSize: 13 }}>
@@ -489,9 +678,23 @@ const ProjectDetail: React.FC = () => {
                   {activeRun.sceneName ? ` · ${activeRun.sceneName}` : ''}
                 </div>
               </div>
+              <div style={{ width: 260 }}>
+                <Progress
+                  percent={activeEstimate.percent}
+                  status={activeEstimate.progressStatus}
+                  strokeWidth={6}
+                  trailColor="#dbeafe"
+                  strokeColor="#1677ff"
+                  size="small"
+                />
+              </div>
+              <div style={{ color: '#475569', fontSize: 13, minWidth: 160 }}>
+                <ClockCircleOutlined style={{ marginRight: 6, color: '#1677ff' }} />
+                已运行 {activeEstimate.elapsedText} / 剩余 {activeEstimate.remainingText}
+              </div>
               <Space>
                 <Tag color={activeEstimate.tagColor} icon={activeEstimate.icon}>
-                  {activeEstimate.phase}
+                  {activeEstimate.statusText}
                 </Tag>
                 <Button
                   size="small"
@@ -500,51 +703,81 @@ const ProjectDetail: React.FC = () => {
                 >
                   分析
                 </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<StopOutlined />}
+                  loading={stopping}
+                  disabled={!activeRun.taskId || TERMINAL_SESSION_STATUSES.has(activeRun.status)}
+                  onClick={handleStopUnityTest}
+                >
+                  停止 Unity
+                </Button>
               </Space>
-            </div>
-
-            <Progress
-              percent={activeEstimate.percent}
-              status={activeEstimate.progressStatus}
-              strokeWidth={12}
-              trailColor="#e8eef7"
-              strokeColor={{
-                '0%': '#1677ff',
-                '55%': '#13c2c2',
-                '100%': '#52c41a',
-              }}
-            />
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                gap: 12,
-                marginTop: 14,
-              }}
-            >
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>当前阶段</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.detail}</div>
-              </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>会话状态</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.statusText}</div>
-              </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>已运行</div>
-                <div style={{ fontWeight: 600 }}>
-                  <ClockCircleOutlined style={{ marginRight: 6, color: '#1677ff' }} />
-                  {activeEstimate.elapsedText}
-                </div>
-              </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>预计剩余</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.remainingText}</div>
-              </div>
             </div>
           </div>
         )}
+
+        <div
+          style={{
+            marginBottom: 18,
+            border: '1px solid #1e293b',
+            borderRadius: 8,
+            overflow: 'hidden',
+            background: '#020617',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '8px 12px',
+              background: '#0f172a',
+              color: '#e2e8f0',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <span>运行日志</span>
+            <span style={{ color: '#94a3b8', fontWeight: 400 }}>
+              {activeRun?.taskId ? `task ${activeRun.taskId}` : '未启动'}
+            </span>
+          </div>
+          <div
+            ref={logBodyRef}
+            style={{
+              height: 160,
+              overflowY: 'auto',
+              padding: '10px 12px',
+              color: '#cbd5e1',
+              fontFamily: 'Consolas, "Courier New", monospace',
+              fontSize: 12,
+              lineHeight: 1.65,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {stageLogs.map((item) => (
+              <div key={item.key}>
+                <span style={{ color: '#64748b' }}>[{item.time}]</span>{' '}
+                <span
+                  style={{
+                    color:
+                      item.tone === 'success'
+                        ? '#86efac'
+                        : item.tone === 'warning'
+                          ? '#fde68a'
+                          : item.tone === 'error'
+                            ? '#fca5a5'
+                            : '#cbd5e1',
+                  }}
+                >
+                  {item.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <Form
           form={form}
@@ -591,19 +824,87 @@ const ProjectDetail: React.FC = () => {
             </Form.Item>
           </Space>
 
-          <Form.Item
-            name="quality_checks"
-            label="渲染质量测试项"
-            rules={[{ required: true, message: '请至少选择一个测试项' }]}
-          >
-            <Checkbox.Group
-              options={[
-                { label: '光照与阴影', value: 'lighting' },
-                { label: '材质与纹理', value: 'materials' },
-                { label: '后处理', value: 'post_processing' },
-                { label: '物理仿真', value: 'physics' },
-              ]}
-            />
+          <Collapse
+            size="small"
+            style={{ marginBottom: 16, background: '#fff' }}
+            items={[
+              {
+                key: 'metrics',
+                forceRender: true,
+                label: '性能采集项（默认全选，可展开调整）',
+                children: (
+                  <Form.Item name="metric_checks" style={{ marginBottom: 0 }}>
+                    <Checkbox.Group style={{ width: '100%' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+                        {METRIC_CHECK_OPTIONS.map((item) => (
+                          <label
+                            key={item.value}
+                            style={{
+                              display: 'flex',
+                              gap: 8,
+                              minHeight: 72,
+                              padding: '10px 12px',
+                              border: '1px solid #e2e8f0',
+                              borderRadius: 8,
+                              background: '#ffffff',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Checkbox value={item.value} />
+                            <span>
+                              <span style={{ display: 'block', fontWeight: 600, color: '#0f172a' }}>{item.title}</span>
+                              <span style={{ display: 'block', marginTop: 4, color: '#64748b', fontSize: 12, lineHeight: 1.45 }}>
+                                {item.detail}
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </Checkbox.Group>
+                  </Form.Item>
+                ),
+              },
+            ]}
+          />
+
+          <Form.Item name="quality_detail_checks" label="渲染质量评估项">
+            <Checkbox.Group style={{ width: '100%' }}>
+              <Collapse
+                size="small"
+                defaultActiveKey={['lighting']}
+                items={QUALITY_CHECK_GROUPS.map((group) => ({
+                  key: group.key,
+                  label: `${group.title}（${group.options.length} 个具体测试部分）`,
+                  children: (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+                      {group.options.map((item) => (
+                        <label
+                          key={item.value}
+                          style={{
+                            display: 'flex',
+                            gap: 8,
+                            minHeight: 76,
+                            padding: '10px 12px',
+                            border: '1px solid #dbeafe',
+                            borderRadius: 8,
+                            background: '#f8fbff',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Checkbox value={item.value} />
+                          <span>
+                            <span style={{ display: 'block', fontWeight: 600, color: '#0f172a' }}>{item.title}</span>
+                            <span style={{ display: 'block', marginTop: 4, color: '#64748b', fontSize: 12, lineHeight: 1.45 }}>
+                              {item.detail}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  ),
+                }))}
+              />
+            </Checkbox.Group>
           </Form.Item>
 
           <Space size="large" wrap>
@@ -615,14 +916,27 @@ const ProjectDetail: React.FC = () => {
             </Form.Item>
           </Space>
 
-          <Button
-            type="primary"
-            htmlType="submit"
-            icon={<PlayCircleOutlined />}
-            loading={launching}
-          >
-            启动 Unity 测试
-          </Button>
+          <Space wrap>
+            <Button
+              type="primary"
+              htmlType="submit"
+              icon={<PlayCircleOutlined />}
+              loading={launching}
+            >
+              启动 Unity 测试
+            </Button>
+            {activeRun && !TERMINAL_SESSION_STATUSES.has(activeRun.status) && (
+              <Button
+                danger
+                icon={<StopOutlined />}
+                loading={stopping}
+                disabled={!activeRun.taskId}
+                onClick={handleStopUnityTest}
+              >
+                停止 Unity
+              </Button>
+            )}
+          </Space>
         </Form>
       </Card>
 

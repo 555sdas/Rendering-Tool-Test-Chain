@@ -88,9 +88,9 @@ namespace XRDataCollector.Core
                 switch (currentPhase)
                 {
                     case CollectionPhase.FrameRate:
-                        return "帧率采集 (0-30秒)";
+                        return $"帧率采集 (0-{FrameRatePhaseDurationSeconds:F0}秒)";
                     case CollectionPhase.Metrics:
-                        return "指标采集 (30-60秒)";
+                        return $"指标采集 ({FrameRatePhaseDurationSeconds:F0}-{FrameRatePhaseDurationSeconds + MetricsPhaseDurationSeconds:F0}秒)";
                     default:
                         return "空闲";
                 }
@@ -230,7 +230,12 @@ namespace XRDataCollector.Core
 
             OnSessionStarted?.Invoke();
             CreatePlatformSessionForCurrentRun();
-            Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已开始。阶段1：前30秒采集帧率。");
+            Debug.Log(
+                $"[XRTestManager] 会话 '{config.sessionName}' 已开始。采集间隔 {config.collectInterval:F2}s；" +
+                $"帧率阶段 {FrameRatePhaseDurationSeconds:F1}s；指标阶段 {MetricsPhaseDurationSeconds:F1}s。"
+            );
+            Debug.Log($"[XRTestManager] 性能采集项：{BuildPerformanceCollectionSummary()}");
+            Debug.Log($"[XRTestManager] 渲染质量评估项：{BuildQualityCollectionSummary()}");
         }
 
         public void StopCollection()
@@ -247,7 +252,10 @@ namespace XRDataCollector.Core
             Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已停止。共采集样本数：{samples.Count}");
 
             if (config.enableNetworkUpload && samples.Count > 0)
+            {
+                Debug.Log($"[XRTestManager] 准备上传 {samples.Count} 个样本到平台。");
                 UploadData("", null);
+            }
         }
 
         public void ExportData(IDataExporter exporter, string filePath)
@@ -295,11 +303,13 @@ namespace XRDataCollector.Core
             if (string.IsNullOrEmpty(url))
             {
                 EnsureRuntimeState();
+                Debug.Log($"[XRTestManager] 使用平台配置上传数据：baseUrl={config.platformBaseUrl}, session={session?.PlatformSessionId ?? 0}");
                 uploader.UploadAsync(samples, session, config, NotifyDataUploaded);
                 return;
             }
 
             string token = string.IsNullOrEmpty(authToken) ? config?.deviceToken : authToken;
+            Debug.Log($"[XRTestManager] 使用固定上传地址上传数据：{url}");
             uploader.UploadAsync(samples, session, url, token, NotifyDataUploaded);
         }
 
@@ -358,6 +368,7 @@ namespace XRDataCollector.Core
 
         private void NotifyDataUploaded(bool success)
         {
+            Debug.Log(success ? "[XRTestManager] 数据上传成功，平台会话已同步。" : "[XRTestManager] 数据上传失败，请检查后端地址、令牌和日志。");
             OnDataUploaded?.Invoke(success);
             QuitAfterCommandLineRun(success);
         }
@@ -415,6 +426,8 @@ namespace XRDataCollector.Core
             if (config.collectDeviceInfo)
                 batchCollectors.Add(deviceCollector);
             batchCollectors.Add(renderQualityCollector);
+
+            Debug.Log($"[XRTestManager] 采集器初始化完成：性能项={BuildPerformanceCollectionSummary()}；渲染质量={BuildQualityCollectionSummary()}");
         }
 
         private void Reset() => EnsureRuntimeState();
@@ -449,7 +462,7 @@ namespace XRDataCollector.Core
             collectTimer = 0f;
             lastBatchFrameCount = Time.frameCount;
             lastBatchRealTime = Time.unscaledTime;
-            Debug.Log("[XRTestManager] 阶段2已开始：采集其他指标（非帧率），时长30秒。");
+            Debug.Log($"[XRTestManager] 指标采集已开始：时长 {MetricsPhaseDurationSeconds:F1}s；采集项 {BuildPerformanceCollectionSummary()}；评估项 {BuildQualityCollectionSummary()}。");
         }
 
         private PerformanceSample CreateBaseSample(string phase)
@@ -475,6 +488,7 @@ namespace XRDataCollector.Core
             }
             samples.Add(sample);
             OnSampleCollected?.Invoke(sample);
+            Debug.Log($"[XRTestManager] 帧率样本 #{samples.Count}：{BuildFrameRateSampleSummary(sample)}");
         }
 
         private void CollectMetricsSample()
@@ -484,6 +498,51 @@ namespace XRDataCollector.Core
                 collector.Collect(ref sample);
             samples.Add(sample);
             OnSampleCollected?.Invoke(sample);
+            Debug.Log($"[XRTestManager] 指标样本 #{samples.Count}：{BuildMetricsSampleSummary(sample)}");
+        }
+
+        private string BuildPerformanceCollectionSummary()
+        {
+            var items = new List<string>();
+            if (config.collectFrameRate) items.Add("FPS");
+            if (config.collectFrameTime) items.Add("帧时间");
+            if (config.collectCpuUsage) items.Add("CPU");
+            if (config.collectGpuUsage) items.Add("GPU/渲染统计");
+            if (config.collectMemory) items.Add("内存");
+            if (config.collectDeviceInfo) items.Add("设备信息");
+            return items.Count > 0 ? string.Join("、", items) : "未选择";
+        }
+
+        private string BuildQualityCollectionSummary()
+        {
+            var items = new List<string>();
+            if (config.testLightingQuality) items.Add("光照与阴影");
+            if (config.testMaterialQuality) items.Add("材质与纹理");
+            if (config.testPostProcessingQuality) items.Add("后处理");
+            if (config.testPhysicsQuality) items.Add("物理仿真");
+            return items.Count > 0 ? string.Join("、", items) : "未选择";
+        }
+
+        private string BuildFrameRateSampleSummary(PerformanceSample sample)
+        {
+            var items = new List<string>();
+            if (config.collectFrameRate) items.Add($"FPS={sample.frameRate:F2}");
+            if (config.collectFrameTime) items.Add($"FrameTime={sample.frameTimeMs:F3}ms");
+            return items.Count > 0 ? string.Join(", ", items) : "本阶段未勾选帧率类采集项";
+        }
+
+        private string BuildMetricsSampleSummary(PerformanceSample sample)
+        {
+            var items = new List<string>();
+            if (config.collectCpuUsage) items.Add($"CPU={sample.cpuUsagePercent:F2}%");
+            if (config.collectGpuUsage) items.Add($"GPU={sample.gpuUsagePercent:F2}%, DrawCalls={sample.drawCalls}");
+            if (config.collectMemory) items.Add($"内存={sample.totalMemoryMB:F2}MB");
+            if (config.collectDeviceInfo && sample.deviceInfo != null) items.Add($"设备={sample.deviceInfo.deviceModel}");
+            if (config.testLightingQuality) items.Add($"光源={sample.activeLightCount}");
+            if (config.testMaterialQuality) items.Add($"材质={sample.materialCount}");
+            if (config.testPostProcessingQuality) items.Add($"后处理={sample.postProcessVolumeCount}");
+            if (config.testPhysicsQuality) items.Add($"刚体={sample.rigidbodyCount}");
+            return items.Count > 0 ? string.Join(", ", items) : "本阶段未勾选指标采集项";
         }
 
         #endregion

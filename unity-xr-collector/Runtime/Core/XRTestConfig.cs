@@ -168,14 +168,39 @@ namespace XRDataCollector.Core
         [Tooltip("测试光照与阴影指标")]
         public bool testLightingQuality = true;
 
+        public bool testLightingActiveLights = true;
+        public bool testLightingRealtimeLights = true;
+        public bool testLightingShadowCasters = true;
+        public bool testLightingReflectionProbes = true;
+        public bool testLightingExposureArtifacts = true;
+
         [Tooltip("测试材质与纹理指标")]
         public bool testMaterialQuality = true;
+
+        public bool testMaterialSlots = true;
+        public bool testMaterialUniqueMaterials = true;
+        public bool testMaterialTransparentMaterials = true;
+        public bool testMaterialDrawCalls = true;
+        public bool testMaterialTextureMemory = true;
 
         [Tooltip("测试后处理指标")]
         public bool testPostProcessingQuality = true;
 
+        public bool testPostProcessVolumes = true;
+        public bool testPostProcessRenderTextures = true;
+        public bool testPostProcessRenderTextureMemory = true;
+        public bool testPostProcessGpuFrameBudget = true;
+        public bool testPostProcessWarnings = true;
+
         [Tooltip("测试物理仿真指标")]
         public bool testPhysicsQuality = true;
+
+        public bool testPhysicsRigidbodies = true;
+        public bool testPhysicsColliders = true;
+        public bool testPhysicsPenetration = true;
+        public bool testPhysicsPoseLatency = true;
+        public bool testPhysicsPredictionError = true;
+        public bool testPhysicsLongFrames = true;
 
         /// <summary>
         /// 最大样本数量限制，超过此数量将停止采集（0 表示无限制）

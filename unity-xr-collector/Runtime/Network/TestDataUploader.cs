@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
 using UnityEngine;
@@ -296,7 +297,7 @@ namespace XRDataCollector.Network
                 yield break;
             }
 
-            string jsonPayload = BuildJsonPayload(samples, session);
+            string jsonPayload = BuildJsonPayload(samples, session, config);
             bool uploadSuccess = false;
             yield return UploadCoroutine(uploadUrl, jsonPayload, token, success => uploadSuccess = success);
             callback?.Invoke(uploadSuccess);
@@ -412,9 +413,15 @@ namespace XRDataCollector.Network
             }
         }
 
-        private string BuildJsonPayload(List<PerformanceSample> samples, XRTestSession session)
+        private string BuildJsonPayload(List<PerformanceSample> samples, XRTestSession session, XRTestConfig config = null)
         {
             var sb = new StringBuilder();
+            bool collectFrameRate = config == null || config.collectFrameRate;
+            bool collectFrameTime = config == null || config.collectFrameTime;
+            bool collectCpuUsage = config == null || config.collectCpuUsage;
+            bool collectGpuUsage = config == null || config.collectGpuUsage;
+            bool collectMemory = config == null || config.collectMemory;
+            bool collectDeviceInfo = config == null || config.collectDeviceInfo;
             sb.AppendLine("{");
             sb.AppendLine("  \"uploadTime\": \"" + DateTime.UtcNow.ToString("O") + "\",");
 
@@ -449,24 +456,29 @@ namespace XRDataCollector.Network
                 sb.AppendLine($"      \"timestamp\": \"{s.timestamp:O}\",");
                 sb.AppendLine($"      \"elapsedTime\": {s.elapsedTime.TotalSeconds:F3},");
                 sb.AppendLine($"      \"collectionPhase\": \"{EscapeJson(s.collectionPhase)}\",");
+                sb.AppendLine($"      \"isXrActive\": {s.isXrActive.ToString().ToLower()},");
+                sb.AppendLine($"      \"xrDeviceName\": \"{EscapeJson(s.xrDeviceName ?? "")}\",");
 
                 if (s.collectionPhase == "frame_rate")
                 {
-                    sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
-                    sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
+                    sb.AppendLine($"      \"frameRate\": {FloatOrNull(collectFrameRate, s.frameRate, "F2")},");
+                    sb.AppendLine($"      \"frameTimeMs\": {FloatOrNull(collectFrameTime, s.frameTimeMs, "F3")},");
                     sb.AppendLine("      \"extraMetrics\": {");
                     sb.AppendLine("        \"collection_phase\": \"frame_rate\"");
                     sb.AppendLine("      }");
                 }
                 else
                 {
-                    sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
-                    sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
-                    sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
-                    sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
-                    sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
-                    sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
-                    AppendDeviceInfo(sb, s.deviceInfo);
+                    sb.AppendLine($"      \"cpuUsagePercent\": {FloatOrNull(collectCpuUsage, s.cpuUsagePercent, "F2")},");
+                    sb.AppendLine($"      \"gpuUsagePercent\": {FloatOrNull(collectGpuUsage, s.gpuUsagePercent, "F2")},");
+                    sb.AppendLine($"      \"drawCalls\": {IntOrNull(collectGpuUsage, s.drawCalls)},");
+                    sb.AppendLine($"      \"totalMemoryMB\": {FloatOrNull(collectMemory, s.totalMemoryMB, "F2")},");
+                    sb.AppendLine($"      \"managedMemoryMB\": {FloatOrNull(collectMemory, s.managedMemoryMB, "F2")},");
+                    sb.AppendLine($"      \"graphicsMemoryMB\": {FloatOrNull(collectMemory, s.graphicsMemoryMB, "F2")},");
+                    sb.AppendLine($"      \"systemMemoryMB\": {FloatOrNull(collectMemory, s.systemMemoryMB, "F2")},");
+                    sb.AppendLine($"      \"textureMemoryMB\": {FloatOrNull(config == null || config.testMaterialTextureMemory, s.textureMemoryMB, "F2")},");
+                    sb.AppendLine($"      \"renderTextureMemoryMB\": {FloatOrNull(config == null || config.testPostProcessRenderTextureMemory, s.renderTextureMemoryMB, "F2")},");
+                    AppendDeviceInfo(sb, collectDeviceInfo ? s.deviceInfo : null);
                     sb.AppendLine("      \"renderQuality\": {");
                     sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
                     sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
@@ -475,8 +487,10 @@ namespace XRDataCollector.Network
                     sb.AppendLine($"        \"material_count\": {s.materialCount},");
                     sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
                     sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
+                    sb.AppendLine($"        \"texture_memory_mb\": {FloatOrNull(config == null || config.testMaterialTextureMemory, s.textureMemoryMB, "F2")},");
                     sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
                     sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
+                    sb.AppendLine($"        \"render_texture_memory_mb\": {FloatOrNull(config == null || config.testPostProcessRenderTextureMemory, s.renderTextureMemoryMB, "F2")},");
                     sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
                     sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
                     sb.AppendLine("      },");
@@ -517,8 +531,26 @@ namespace XRDataCollector.Network
             sb.AppendLine($"        \"graphicsDeviceVersion\": \"{EscapeJson(info.graphicsDeviceVersion)}\",");
             sb.AppendLine($"        \"graphicsDeviceType\": \"{EscapeJson(info.graphicsDeviceType)}\",");
             sb.AppendLine($"        \"graphicsMemorySize\": {info.graphicsMemorySize},");
-            sb.AppendLine($"        \"screenResolution\": \"{EscapeJson(info.screenResolution)}\"");
+            sb.AppendLine($"        \"graphicsShaderLevel\": {info.graphicsShaderLevel},");
+            sb.AppendLine($"        \"maxTextureSize\": {info.maxTextureSize},");
+            sb.AppendLine($"        \"supportsVr\": {info.supportsVr.ToString().ToLower()},");
+            sb.AppendLine($"        \"xrDeviceActive\": {info.xrDeviceActive.ToString().ToLower()},");
+            sb.AppendLine($"        \"xrDeviceName\": \"{EscapeJson(info.xrDeviceName)}\",");
+            sb.AppendLine($"        \"xrRenderViewportScale\": {info.xrRenderViewportScale.ToString("F3", CultureInfo.InvariantCulture)},");
+            sb.AppendLine($"        \"screenResolution\": \"{EscapeJson(info.screenResolution)}\",");
+            sb.AppendLine($"        \"screenDpi\": {info.screenDpi.ToString("F2", CultureInfo.InvariantCulture)},");
+            sb.AppendLine($"        \"targetFrameRate\": {info.targetFrameRate}");
             sb.AppendLine("      },");
+        }
+
+        private string FloatOrNull(bool enabled, float value, string format)
+        {
+            return enabled ? value.ToString(format, CultureInfo.InvariantCulture) : "null";
+        }
+
+        private string IntOrNull(bool enabled, int value)
+        {
+            return enabled ? value.ToString(CultureInfo.InvariantCulture) : "null";
         }
 
         private string BuildCreateSessionJson(XRTestConfig config, XRTestSession session)

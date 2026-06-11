@@ -107,6 +107,16 @@ namespace XRDataCollector.Data
         /// </summary>
         public float systemMemoryMB;
 
+        /// <summary>
+        /// 纹理资源内存估算（MB）
+        /// </summary>
+        public float textureMemoryMB;
+
+        /// <summary>
+        /// RenderTexture 资源内存估算（MB）
+        /// </summary>
+        public float renderTextureMemoryMB;
+
         #endregion
 
         #region Render Quality Metrics

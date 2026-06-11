@@ -107,6 +107,13 @@ def _first_value(*values):
     return None
 
 
+def _prefer_specific(existing, *values):
+    generic_values = {"editor", "unity", "unity editor", "unknown", "未知设备", "-"}
+    if isinstance(existing, str) and existing.strip() and existing.strip().lower() not in generic_values:
+        return existing
+    return _first_value(*values, existing)
+
+
 def _try_parse_timestamp(value) -> Optional[datetime]:
     return parse_utc_datetime(value)
 
@@ -127,6 +134,10 @@ def _parse_float(value) -> Optional[float]:
         except ValueError:
             return None
     return None
+
+
+def _sample_value(item: dict, *keys: str):
+    return _first_value(*(item.get(key) for key in keys))
 
 
 def _device_info_from_sample(item: dict) -> dict:
@@ -469,14 +480,25 @@ async def add_performance_samples_batch(
     timestamps: list[datetime] = []
     elapsed_seconds: list[float] = []
     first_device_info: dict = {}
+    first_xr_device_name: str | None = None
     first_sample: dict = payload.samples[0] if payload.samples else {}
     for item in payload.samples:
         extra_metrics = item.get("extra_metrics") or item.get("extraMetrics") or {}
         if not isinstance(extra_metrics, dict):
             extra_metrics = {}
+        else:
+            extra_metrics = dict(extra_metrics)
 
         render_quality = item.get("render_quality") or item.get("renderQuality")
         if isinstance(render_quality, dict):
+            render_quality = dict(render_quality)
+            for target_key, source_keys in {
+                "texture_memory_mb": ("textureMemoryMB", "texture_memory_mb"),
+                "render_texture_memory_mb": ("renderTextureMemoryMB", "render_texture_memory_mb"),
+            }.items():
+                value = _sample_value(item, *source_keys)
+                if value is not None and target_key not in render_quality:
+                    render_quality[target_key] = value
             extra_metrics["render_quality"] = render_quality
 
         device_info = _device_info_from_sample(item)
@@ -484,6 +506,27 @@ async def add_performance_samples_batch(
             extra_metrics["device_info"] = device_info
             if not first_device_info:
                 first_device_info = device_info
+
+        collection_phase = _sample_value(item, "collection_phase", "collectionPhase")
+        if collection_phase:
+            extra_metrics["collection_phase"] = collection_phase
+
+        xr_device_name = _sample_value(
+            item,
+            "xr_device_name",
+            "xrDeviceName",
+            "xr_device",
+        )
+        if not xr_device_name and device_info:
+            xr_device_name = _sample_value(device_info, "xrDeviceName", "xr_device_name")
+        if xr_device_name:
+            extra_metrics["xr_device_name"] = xr_device_name
+            if not first_xr_device_name:
+                first_xr_device_name = str(xr_device_name)
+
+        is_xr_active = _sample_value(item, "is_xr_active", "isXrActive")
+        if is_xr_active is not None:
+            extra_metrics["is_xr_active"] = is_xr_active
 
         timestamp = _parse_timestamp(item.get("timestamp"))
         timestamps.append(timestamp)
@@ -494,31 +537,41 @@ async def add_performance_samples_batch(
         )
         if elapsed_time is not None:
             elapsed_seconds.append(max(0.0, elapsed_time))
+            extra_metrics["elapsed_time_seconds"] = max(0.0, elapsed_time)
+
+        memory_metrics = {
+            "managed_memory_mb": _sample_value(item, "managed_memory_mb", "managedMemoryMB"),
+            "graphics_memory_mb": _sample_value(item, "graphics_memory_mb", "graphicsMemoryMB"),
+            "system_memory_mb": _sample_value(item, "system_memory_mb", "systemMemoryMB"),
+        }
+        memory_metrics = {key: value for key, value in memory_metrics.items() if value is not None}
+        if memory_metrics:
+            extra_metrics["memory"] = memory_metrics
 
         objects.append(
             PerformanceSample(
                 test_session_id=session_id,
                 timestamp=timestamp,
-                frame_time_ms=item.get("frame_time_ms") or item.get("frameTimeMs"),
-                fps=item.get("fps") or item.get("frameRate"),
-                cpu_usage_percent=item.get("cpu_usage_percent") or item.get("cpuUsagePercent"),
-                gpu_usage_percent=item.get("gpu_usage_percent") or item.get("gpuUsagePercent"),
-                memory_mb=item.get("memory_mb") or item.get("totalMemoryMB"),
-                battery_level=item.get("battery_level") or item.get("batteryLevel"),
-                battery_temperature=item.get("battery_temperature") or item.get("batteryTemperature"),
-                draw_calls=item.get("draw_calls") or item.get("drawCalls"),
-                triangle_count=item.get("triangle_count") or item.get("triangles"),
-                vertex_count=item.get("vertex_count") or item.get("vertices"),
-                set_pass_calls=item.get("set_pass_calls") or item.get("setPassCalls"),
-                texture_memory_mb=item.get("texture_memory_mb") or item.get("textureMemoryMB"),
-                mesh_memory_mb=item.get("mesh_memory_mb") or item.get("meshMemoryMB"),
-                render_texture_memory_mb=item.get("render_texture_memory_mb") or item.get("renderTextureMemoryMB"),
-                gc_collect_count=item.get("gc_collect_count") or item.get("gcCollectCount"),
-                gc_allocated_mb=item.get("gc_allocated_mb") or item.get("gcAllocatedMB"),
-                screen_resolution=item.get("screen_resolution") or item.get("screenResolution"),
-                tracking_state=item.get("tracking_state") or item.get("trackingState"),
-                prediction_error_ms=item.get("prediction_error_ms") or item.get("predictionErrorMs"),
-                pose_latency_ms=item.get("pose_latency_ms") or item.get("poseLatencyMs"),
+                frame_time_ms=_sample_value(item, "frame_time_ms", "frameTimeMs"),
+                fps=_sample_value(item, "fps", "frameRate"),
+                cpu_usage_percent=_sample_value(item, "cpu_usage_percent", "cpuUsagePercent"),
+                gpu_usage_percent=_sample_value(item, "gpu_usage_percent", "gpuUsagePercent"),
+                memory_mb=_sample_value(item, "memory_mb", "totalMemoryMB"),
+                battery_level=_sample_value(item, "battery_level", "batteryLevel"),
+                battery_temperature=_sample_value(item, "battery_temperature", "batteryTemperature"),
+                draw_calls=_sample_value(item, "draw_calls", "drawCalls"),
+                triangle_count=_sample_value(item, "triangle_count", "triangles", "triangleCount"),
+                vertex_count=_sample_value(item, "vertex_count", "vertices", "vertexCount"),
+                set_pass_calls=_sample_value(item, "set_pass_calls", "setPassCalls"),
+                texture_memory_mb=_sample_value(item, "texture_memory_mb", "textureMemoryMB"),
+                mesh_memory_mb=_sample_value(item, "mesh_memory_mb", "meshMemoryMB"),
+                render_texture_memory_mb=_sample_value(item, "render_texture_memory_mb", "renderTextureMemoryMB"),
+                gc_collect_count=_sample_value(item, "gc_collect_count", "gcCollectCount"),
+                gc_allocated_mb=_sample_value(item, "gc_allocated_mb", "gcAllocatedMB"),
+                screen_resolution=_sample_value(item, "screen_resolution", "screenResolution") or device_info.get("screenResolution"),
+                tracking_state=_sample_value(item, "tracking_state", "trackingState"),
+                prediction_error_ms=_sample_value(item, "prediction_error_ms", "predictionErrorMs"),
+                pose_latency_ms=_sample_value(item, "pose_latency_ms", "poseLatencyMs"),
                 extra_metrics=extra_metrics or None,
             )
         )
@@ -579,14 +632,14 @@ async def add_performance_samples_batch(
 
     device_info = first_device_info
     if device_info:
-        session.device_model = _first_value(
+        session.device_model = _prefer_specific(
             session.device_model,
             device_info.get("deviceModel"),
             device_info.get("deviceName"),
             first_sample.get("xrDeviceName"),
         )
-        session.os_version = _first_value(session.os_version, device_info.get("operatingSystem"))
-        session.xr_runtime = _first_value(
+        session.os_version = _prefer_specific(session.os_version, device_info.get("operatingSystem"))
+        session.xr_runtime = _prefer_specific(
             session.xr_runtime,
             upload_session.get("xrRuntime"),
             device_info.get("xrRuntime"),
@@ -619,13 +672,22 @@ async def add_performance_samples_batch(
                 if isinstance(device_info.get("systemMemorySize"), (int, float))
                 else None,
                 "screen_resolution": device_info.get("screenResolution") or first_sample.get("screenResolution"),
+                "device_type": device_info.get("deviceType"),
                 "unity_version": unity_version,
                 "engine": f"Unity {unity_version}" if unity_version else "Unity",
                 "platform": upload_platform or device_info.get("applicationPlatform"),
                 "runtime_mode": upload_runtime_mode or device_info.get("runtimeMode"),
                 "render_pipeline": upload_render_pipeline or device_info.get("renderPipeline"),
                 "xr_runtime": session.xr_runtime,
-                "xr_device_name": first_sample.get("xrDeviceName"),
+                "xr_device_name": first_xr_device_name or device_info.get("xrDeviceName"),
+                "xr_device_active": device_info.get("xrDeviceActive"),
+                "xr_render_viewport_scale": device_info.get("xrRenderViewportScale"),
+                "graphics_device_type": device_info.get("graphicsDeviceType"),
+                "graphics_shader_level": device_info.get("graphicsShaderLevel"),
+                "max_texture_size": device_info.get("maxTextureSize"),
+                "supports_vr": device_info.get("supportsVr"),
+                "screen_dpi": device_info.get("screenDpi"),
+                "target_frame_rate": device_info.get("targetFrameRate"),
                 "sample_count": len(objects),
             },
         )
@@ -647,7 +709,8 @@ async def add_performance_samples_batch(
                 "graphics_api": upload_graphics_api,
                 "render_pipeline": upload_render_pipeline,
                 "xr_runtime": session.xr_runtime,
-            },
+                "xr_device_name": first_xr_device_name,
+                },
         )
 
     db.commit()

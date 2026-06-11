@@ -68,6 +68,15 @@ export interface RenderQualityCategory {
   tested?: boolean;
   status: string;
   metrics: Record<string, number | string | null>;
+  metric_details?: Array<{
+    key: string;
+    label: string;
+    value: number | string | null;
+    unit?: string | null;
+    tested: boolean;
+    status: string;
+    description: string;
+  }>;
   deductions: Array<{
     points: number;
     reason: string;
@@ -92,6 +101,7 @@ export interface RenderQualityAssessment {
     has_reference_frame_metrics: boolean;
     has_runtime_quality_metrics: boolean;
     enabled_quality_checks?: Record<string, boolean>;
+    enabled_quality_metric_checks?: Record<string, Record<string, boolean>>;
     tested_category_count?: number;
     note: string;
   };

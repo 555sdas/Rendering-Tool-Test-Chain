@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space, Descriptions, Button } from 'antd';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space, Descriptions, Button, Empty, Alert } from 'antd';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   LineChart,
@@ -75,6 +75,68 @@ const fallbackSessionOptions = [
   { value: 'session3', label: 'PICO 4 - 协同场景' },
 ];
 
+interface SampleChartPoint {
+  time: string;
+  fps: number | null;
+  cpu: number | null;
+  gpu: number | null;
+  memory: number | null;
+  vram: number | null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function formatSampleTime(sample: PerformanceSample, index: number): string {
+  const extra = asRecord(sample.extra_metrics);
+  const elapsed = asNumber(extra.elapsed_time_seconds);
+  if (elapsed !== null) return `${Math.round(elapsed)}s`;
+  return `${index}s`;
+}
+
+function buildSampleDeviceConfig(samples: PerformanceSample[]): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  const setIfValue = (key: string, value: unknown) => {
+    if (config[key] === undefined && value !== undefined && value !== null && value !== '') {
+      config[key] = value;
+    }
+  };
+
+  for (const sample of samples) {
+    const extra = asRecord(sample.extra_metrics);
+    const deviceInfo = asRecord(extra.device_info);
+    const memoryInfo = asRecord(extra.memory);
+    setIfValue('device_name', deviceInfo.deviceName);
+    setIfValue('device_model', deviceInfo.deviceModel);
+    setIfValue('device_type', deviceInfo.deviceType);
+    setIfValue('os_version', deviceInfo.operatingSystem);
+    setIfValue('cpu_model', deviceInfo.processorType);
+    setIfValue('processor_count', deviceInfo.processorCount);
+    setIfValue('system_memory_mb', deviceInfo.systemMemorySize ?? memoryInfo.system_memory_mb);
+    setIfValue('gpu_model', deviceInfo.graphicsDeviceName);
+    setIfValue('gpu_vendor', deviceInfo.graphicsDeviceVendor);
+    setIfValue('gpu_version', deviceInfo.graphicsDeviceVersion);
+    setIfValue('graphics_api', deviceInfo.graphicsDeviceType);
+    setIfValue('gpu_memory_mb', deviceInfo.graphicsMemorySize ?? memoryInfo.graphics_memory_mb);
+    setIfValue('screen_resolution', sample.screen_resolution ?? deviceInfo.screenResolution);
+    setIfValue('screen_dpi', deviceInfo.screenDpi);
+    setIfValue('unity_version', deviceInfo.unityVersion);
+    setIfValue('runtime_mode', deviceInfo.runtimeMode);
+    setIfValue('render_pipeline', deviceInfo.renderPipeline);
+    setIfValue('xr_device_name', extra.xr_device_name ?? deviceInfo.xrDeviceName);
+    setIfValue('xr_device_active', extra.is_xr_active ?? deviceInfo.xrDeviceActive);
+    setIfValue('target_frame_rate', deviceInfo.targetFrameRate);
+  }
+  return config;
+}
+
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -104,8 +166,10 @@ const Analysis: React.FC = () => {
   const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<TestSession | null>(null);
-  const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
+  const [rawSamples, setRawSamples] = useState<PerformanceSample[]>([]);
+  const [sampleChartData, setSampleChartData] = useState<SampleChartPoint[]>([]);
   const [exportingReport, setExportingReport] = useState(false);
+  const [expandedQualityRowKeys, setExpandedQualityRowKeys] = useState<React.Key[]>([]);
 
   useEffect(() => {
     const loadSessions = async () => {
@@ -135,6 +199,7 @@ const Analysis: React.FC = () => {
     if (!Number.isFinite(sessionId)) {
       setFullReport(null);
       setSelectedSessionDetail(null);
+      setRawSamples([]);
       setSampleChartData([]);
       return;
     }
@@ -148,31 +213,54 @@ const Analysis: React.FC = () => {
         ]);
         setFullReport(report);
         setSelectedSessionDetail(sessionDetail);
-        setSampleChartData(samples.slice(0, 120).map((sample: PerformanceSample, index) => ({
-          time: `${index}s`,
-          fps: Number(sample.fps || 0),
-          cpu: Number(sample.cpu_usage_percent || 0),
-          gpu: Number(sample.gpu_usage_percent || 0),
-          memory: Number(((sample.memory_mb || 0) / 1024).toFixed(2)),
-        })));
+        setRawSamples(samples);
+        setSampleChartData(samples.slice(0, 300).map((sample: PerformanceSample, index) => {
+          const extra = asRecord(sample.extra_metrics);
+          const memoryInfo = asRecord(extra.memory);
+          const graphicsMemory = asNumber(memoryInfo.graphics_memory_mb);
+          return {
+            time: formatSampleTime(sample, index),
+            fps: asNumber(sample.fps),
+            cpu: asNumber(sample.cpu_usage_percent),
+            gpu: asNumber(sample.gpu_usage_percent),
+            memory: sample.memory_mb == null ? null : Number((sample.memory_mb / 1024).toFixed(2)),
+            vram: sample.render_texture_memory_mb != null
+              ? Number((sample.render_texture_memory_mb / 1024).toFixed(2))
+              : graphicsMemory == null ? null : Number((graphicsMemory / 1024).toFixed(2)),
+          };
+        }));
       } catch {
+        setRawSamples([]);
+        setSampleChartData([]);
         message.warning('未能读取后端分析结果，当前显示内置分析样例');
       }
     };
     loadAnalysis();
   }, [selectedSessions]);
 
-  const reportConfig = fullReport?.session_info.config || selectedSessionDetail?.config;
+  const reportConfig = {
+    ...buildSampleDeviceConfig(rawSamples),
+    ...(selectedSessionDetail?.config || {}),
+    ...(fullReport?.session_info.config || {}),
+  };
+  const metricConfig = asRecord(reportConfig.metric_checks);
+  const fpsCollectionDisabled = metricConfig.frame_rate === false && metricConfig.frame_time === false;
+  const resourceCollectionDisabled =
+    metricConfig.cpu === false &&
+    metricConfig.gpu === false &&
+    metricConfig.memory === false;
+  const deviceInfoCollectionDisabled = metricConfig.device_info === false;
   const getReportString = (keys: string[], fallback = '-') => getConfigString(reportConfig, keys, fallback);
   const getReportNumber = (keys: string[]) => getConfigNumber(reportConfig, keys);
   const unityVersion = getReportString(['unity_version', 'unityVersion'], '');
   const engineDisplay = getReportString(['engine'], unityVersion ? `Unity ${unityVersion}` : '-');
   const graphicsApiDisplay = getReportString(
-    ['graphics_api', 'graphicsApi', 'graphicsDeviceType'],
+    ['graphics_api', 'graphicsApi', 'graphics_device_type', 'graphicsDeviceType'],
     getReportString(['gpu_version', 'graphicsDeviceVersion']),
   );
   const selectedSessionId = Number(selectedSessions[0]);
   const canExportReport = Number.isFinite(selectedSessionId);
+  const isBackendSessionSelected = Number.isFinite(selectedSessionId);
 
   const handleExportReport = async () => {
     if (!canExportReport) {
@@ -237,13 +325,60 @@ const Analysis: React.FC = () => {
   ];
 
   const fpsChartData = sampleChartData.length
-    ? sampleChartData.filter((d) => d.fps > 0).slice(0, 30)
+    ? sampleChartData.filter((d) => d.fps !== null && d.fps > 0).slice(0, 120)
     : [];
   const resourceChartData = sampleChartData.length
-    ? sampleChartData.filter((d) => d.cpu > 0 || d.gpu > 0).slice(-30)
+    ? sampleChartData.filter((d) => d.cpu !== null || d.gpu !== null || d.memory !== null || d.vram !== null).slice(-120)
     : [];
 
   const renderQuality = fullReport?.render_quality_assessment;
+  useEffect(() => {
+    setExpandedQualityRowKeys(
+      (renderQuality?.categories || [])
+        .filter((category) => Boolean(category.metric_details?.length))
+        .map((category) => category.key),
+    );
+  }, [renderQuality]);
+
+  const metricDetailColumns = [
+    {
+      title: '具体指标',
+      dataIndex: 'label',
+      key: 'label',
+      width: 180,
+      render: (text: string) => <strong>{text}</strong>,
+    },
+    {
+      title: '采集值',
+      key: 'value',
+      width: 140,
+      render: (_: unknown, record: NonNullable<RenderQualityCategory['metric_details']>[number]) => {
+        if (!record.tested) return <Tag color="default">未测试</Tag>;
+        if (record.value === null || record.value === undefined) return <Tag color="orange">缺少数据</Tag>;
+        return (
+          <Tag color="blue" style={{ fontFamily: 'monospace' }}>
+            {record.value}{record.unit ? ` ${record.unit}` : ''}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 110,
+      render: (value: string) => {
+        const color = value === '已采集' ? 'green' : value === '缺少数据' ? 'orange' : 'default';
+        return <Tag color={color}>{value}</Tag>;
+      },
+    },
+    {
+      title: '说明',
+      dataIndex: 'description',
+      key: 'description',
+      render: (value: string) => <span style={{ color: '#64748b' }}>{value}</span>,
+    },
+  ];
   const qualityColumns = [
     {
       title: '维度',
@@ -273,17 +408,18 @@ const Analysis: React.FC = () => {
       },
     },
     {
-      title: '主要依据',
+      title: '指标明细',
       key: 'metrics',
-      render: (_: unknown, record: RenderQualityCategory) => (
-        <span>
-          {Object.entries(record.metrics)
-            .filter(([, value]) => value !== null && value !== undefined)
-            .slice(0, 4)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join('；') || '暂无专项采集指标'}
-        </span>
-      ),
+      render: (_: unknown, record: RenderQualityCategory) => {
+        if (record.tested === false) {
+          return <Tag color="default">未参与本次评估</Tag>;
+        }
+        const details = record.metric_details || [];
+        if (!details.length) return '-';
+        const testedCount = details.filter((item) => item.tested).length;
+        const collectedCount = details.filter((item) => item.tested && item.value !== null && item.value !== undefined).length;
+        return `${collectedCount}/${testedCount} 已采集`;
+      },
     },
     {
       title: '扣分项',
@@ -363,30 +499,36 @@ const Analysis: React.FC = () => {
       <Tabs defaultActiveKey="fps">
         <TabPane tab="FPS趋势" key="fps">
           <Card>
-            <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={fpsChartData.length ? fpsChartData : fpsData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" />
-                <YAxis domain={[0, 90]} />
-                <Tooltip />
-                <Legend />
-                {sampleChartData.length ? (
-                  <Line type="monotone" dataKey="fps" stroke="#3b82f6" name="FPS" strokeWidth={2} dot={false} />
-                ) : (
-                  <>
-                    {selectedSessions.includes('session1') && (
-                      <Line type="monotone" dataKey="session1" stroke="#3b82f6" name="Quest 3" strokeWidth={2} dot={false} />
-                    )}
-                    {selectedSessions.includes('session2') && (
-                      <Line type="monotone" dataKey="session2" stroke="#10b981" name="Quest 2" strokeWidth={2} dot={false} />
-                    )}
-                    {selectedSessions.includes('session3') && (
-                      <Line type="monotone" dataKey="session3" stroke="#f59e0b" name="PICO 4" strokeWidth={2} dot={false} />
-                    )}
-                  </>
-                )}
-              </LineChart>
-            </ResponsiveContainer>
+            {fpsChartData.length ? (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={fpsChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis domain={[0, 'auto']} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="fps" stroke="#3b82f6" name="FPS" strokeWidth={2} dot={false} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : isBackendSessionSelected ? (
+              <Empty
+                description={fpsCollectionDisabled ? '本次未勾选 FPS/帧时间采集' : '暂无 FPS 样本'}
+                style={{ padding: '96px 0' }}
+              />
+            ) : (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={fpsData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis domain={[0, 90]} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="session1" stroke="#3b82f6" name="Quest 3" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="session2" stroke="#10b981" name="Quest 2" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="session3" stroke="#f59e0b" name="PICO 4" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </Card>
         </TabPane>
 
@@ -433,20 +575,42 @@ const Analysis: React.FC = () => {
 
         <TabPane tab="资源占用" key="resources">
           <Card>
-            <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={resourceChartData.length ? resourceChartData : resourceData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" />
-                <YAxis yAxisId="left" domain={[0, 100]} />
-                <YAxis yAxisId="right" orientation="right" domain={[0, 5]} />
-                <Tooltip />
-                <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%)" strokeWidth={2} dot={false} />
-                <Line yAxisId="left" type="monotone" dataKey="gpu" stroke="#ef4444" name="GPU (%)" strokeWidth={2} dot={false} />
-                <Line yAxisId="right" type="monotone" dataKey="memory" stroke="#10b981" name="内存 (GB)" strokeWidth={2} dot={false} />
-                <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存 (GB)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            {resourceChartData.length ? (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={resourceChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis yAxisId="left" domain={[0, 100]} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 'auto']} />
+                  <Tooltip />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%)" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="left" type="monotone" dataKey="gpu" stroke="#ef4444" name="GPU (%)" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="right" type="monotone" dataKey="memory" stroke="#10b981" name="内存 (GB)" strokeWidth={2} dot={false} connectNulls />
+                  <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存/RT (GB)" strokeWidth={2} dot={false} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : isBackendSessionSelected ? (
+              <Empty
+                description={resourceCollectionDisabled ? '本次未勾选 CPU/GPU/内存采集' : '暂无资源样本'}
+                style={{ padding: '96px 0' }}
+              />
+            ) : (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={resourceData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis yAxisId="left" domain={[0, 100]} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 5]} />
+                  <Tooltip />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%)" strokeWidth={2} dot={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="gpu" stroke="#ef4444" name="GPU (%)" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="memory" stroke="#10b981" name="内存 (GB)" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存 (GB)" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </Card>
         </TabPane>
 
@@ -485,6 +649,20 @@ const Analysis: React.FC = () => {
               rowKey="key"
               pagination={false}
               size="middle"
+              expandable={{
+                expandedRowKeys: expandedQualityRowKeys,
+                onExpandedRowsChange: (keys) => setExpandedQualityRowKeys([...keys]),
+                expandedRowRender: (record) => (
+                  <Table
+                    columns={metricDetailColumns}
+                    dataSource={record.metric_details || []}
+                    rowKey="key"
+                    pagination={false}
+                    size="small"
+                  />
+                ),
+                rowExpandable: (record) => Boolean(record.metric_details?.length),
+              }}
             />
             <div style={{ color: '#64748b', marginTop: 12 }}>
               {renderQuality?.evaluation_mode.description}
@@ -506,6 +684,14 @@ const Analysis: React.FC = () => {
         <TabPane tab="设备信息" key="device-info">
           {fullReport?.session_info ? (
             <Card>
+              {deviceInfoCollectionDisabled && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="本次未勾选设备信息采集，页面只能显示会话配置中已有的引擎和图形 API 信息。"
+                />
+              )}
               <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12}>
                   <Descriptions title="设备概况" bordered size="small" column={1}>
@@ -515,11 +701,17 @@ const Analysis: React.FC = () => {
                     <Descriptions.Item label="设备型号">
                       {getReportString(['device_model', 'deviceModel'], fullReport.session_info.device_model || '-')}
                     </Descriptions.Item>
+                    <Descriptions.Item label="设备类型">
+                      {getReportString(['device_type', 'deviceType'])}
+                    </Descriptions.Item>
                     <Descriptions.Item label="操作系统">
                       {getReportString(['os_version', 'operatingSystem'], fullReport.session_info.os_version || '-')}
                     </Descriptions.Item>
                     <Descriptions.Item label="屏幕分辨率">
                       {getReportString(['screen_resolution', 'screenResolution'])}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="屏幕 DPI">
+                      {getReportString(['screen_dpi', 'screenDpi'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="运行环境">
                       {getReportString(['xr_runtime', 'xrRuntime', 'runtime_mode', 'runtimeMode'], fullReport.session_info.xr_runtime || '-')}
@@ -542,6 +734,9 @@ const Analysis: React.FC = () => {
                     </Descriptions.Item>
                     <Descriptions.Item label="GPU 厂商">
                       {getReportString(['gpu_vendor', 'graphicsDeviceVendor'])}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GPU 类型">
+                      {getReportString(['graphics_device_type', 'graphicsDeviceType', 'graphics_api'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="GPU 驱动版本">
                       {getReportString(['gpu_version', 'graphicsDeviceVersion'])}
@@ -575,6 +770,12 @@ const Analysis: React.FC = () => {
                     </Descriptions.Item>
                     <Descriptions.Item label="XR 设备名称">
                       {getReportString(['xr_device_name', 'xrDeviceName'])}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="XR 激活状态">
+                      {getReportString(['xr_device_active', 'xrDeviceActive'])}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="目标帧率">
+                      {getReportString(['target_frame_rate', 'targetFrameRate'])}
                     </Descriptions.Item>
                     <Descriptions.Item label="样本数">
                       {String(getReportNumber(['sample_count', 'sampleCount']) ?? '-')}
