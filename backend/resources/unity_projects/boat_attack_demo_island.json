@@ -1,0 +1,12 @@
+{
+  "id": "boat_attack_demo_island",
+  "name": "BoatAttack 船场景 - demo_Island",
+  "description": "BoatAttack 船舶岛屿演示场景，用于渲染性能和渲染质量预测试。",
+  "project_path": "D:/intellij项目/BoatAttack",
+  "scene_path": "Assets/scenes/demo_Island.unity",
+  "collector_package_name": "com.xr.testdatacollector",
+  "collector_package_path": "C:/Users/fz121/PycharmProjects/Rendering-Tool-Test-Chain/unity-xr-collector",
+  "enabled": true,
+  "platform_project_ids": [],
+  "tags": ["BoatAttack", "URP", "船舶场景", "渲染性能"]
+}

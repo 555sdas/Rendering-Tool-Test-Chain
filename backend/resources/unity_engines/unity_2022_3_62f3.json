@@ -1,0 +1,9 @@
+{
+  "id": "unity_2022_3_62f3",
+  "name": "Unity 2022.3.62f3",
+  "version": "2022.3.62f3",
+  "executable_path": "E:/unity_install/2022.3.62f3/Editor/Unity.exe",
+  "enabled": true,
+  "is_default": true,
+  "notes": "本机 BoatAttack 测试使用的 Unity Editor。"
+}
