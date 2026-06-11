@@ -1,0 +1,12 @@
+{
+  "id": "example_scene_resource",
+  "name": "Example Project - SampleScene",
+  "description": "Example only. Change project_path and scene_path before use.",
+  "project_path": "D:/UnityProjects/ExampleProject",
+  "scene_path": "Assets/Scenes/SampleScene.unity",
+  "collector_package_name": "com.xr.testdatacollector",
+  "collector_package_path": "C:/Users/fz121/PycharmProjects/Rendering-Tool-Test-Chain/unity-xr-collector",
+  "enabled": false,
+  "platform_project_ids": [],
+  "tags": ["Example", "LocalUnityScene"]
+}

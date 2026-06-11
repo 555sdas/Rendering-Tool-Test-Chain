@@ -1,0 +1,9 @@
+{
+  "id": "unity_example_local",
+  "name": "1",
+  "version": "2022.3.x",
+  "executable_path": "E:/unity_install/2022.3.62f3/Editor/Unity.exe",
+  "enabled": true,
+  "is_default": false,
+  "notes": "Example only. Change executable_path to your Unity.exe path and set enabled=true before use."
+}
