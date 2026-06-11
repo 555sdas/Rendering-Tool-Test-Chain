@@ -1,0 +1,141 @@
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.permissions import Permission, require_permission
+from app.database import get_db
+from app.models.user import User
+from app.services.audit_service import log_audit
+from app.services.unity_runner_service import UnityRunnerService
+
+
+router = APIRouter(prefix="/unity-runner", tags=["Unity 本地测试"])
+
+
+class QualityChecks(BaseModel):
+    lighting: bool = True
+    materials: bool = True
+    post_processing: bool = True
+    physics: bool = True
+
+
+class MetricChecks(BaseModel):
+    frame_rate: bool = True
+    frame_time: bool = True
+    cpu: bool = True
+    gpu: bool = True
+    memory: bool = True
+    device_info: bool = True
+
+
+class UnityTestStartRequest(BaseModel):
+    project_id: int = Field(..., gt=0)
+    unity_engine_id: str = Field(..., min_length=1)
+    scene_resource_id: str = Field(..., min_length=1)
+    quality_checks: QualityChecks = Field(default_factory=QualityChecks)
+    quality_metric_checks: dict[str, bool] = Field(default_factory=dict)
+    metric_checks: MetricChecks = Field(default_factory=MetricChecks)
+    collect_interval: float = Field(1.0, ge=0.1, le=10.0)
+    frame_rate_duration_seconds: float = Field(30.0, ge=1.0, le=600.0)
+    metrics_duration_seconds: float = Field(30.0, ge=1.0, le=600.0)
+    batchmode: bool = False
+    ensure_plugin: bool = True
+
+
+@router.get("/engines")
+async def list_unity_engines(
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    service = UnityRunnerService(db)
+    return {"items": service.list_engines()}
+
+
+@router.get("/scenes")
+async def list_unity_scene_resources(
+    project_id: Optional[int] = Query(None, gt=0),
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    service = UnityRunnerService(db)
+    return {"items": service.list_scenes(project_id=project_id)}
+
+
+@router.post("/test-tasks/start")
+async def start_unity_test_task(
+    request: Request,
+    payload: UnityTestStartRequest,
+    current_user: User = Depends(require_permission(Permission.TEST_EXECUTE)),
+    db: Session = Depends(get_db),
+):
+    service = UnityRunnerService(db)
+    result = service.start_test(
+        project_id=payload.project_id,
+        unity_engine_id=payload.unity_engine_id,
+        scene_resource_id=payload.scene_resource_id,
+        quality_checks=payload.quality_checks.model_dump(),
+        quality_metric_checks=payload.quality_metric_checks,
+        metric_checks=payload.metric_checks.model_dump(),
+        collect_interval=payload.collect_interval,
+        frame_rate_duration_seconds=payload.frame_rate_duration_seconds,
+        metrics_duration_seconds=payload.metrics_duration_seconds,
+        batchmode=payload.batchmode,
+        ensure_plugin=payload.ensure_plugin,
+        creator_id=current_user.id,
+    )
+
+    await log_audit(
+        db=db,
+        action="test_execute",
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else None,
+        resource_type="test_task",
+        resource_id=str(result["task"]["id"]),
+        details={
+            "source": "web_unity_runner",
+            "project_id": payload.project_id,
+            "session_id": result["session"]["id"],
+            "unity_engine_id": payload.unity_engine_id,
+            "scene_resource_id": payload.scene_resource_id,
+        },
+    )
+
+    return result
+
+
+@router.post("/test-tasks/{task_id}/stop")
+async def stop_unity_test_task(
+    request: Request,
+    task_id: int,
+    current_user: User = Depends(require_permission(Permission.TEST_EXECUTE)),
+    db: Session = Depends(get_db),
+):
+    service = UnityRunnerService(db)
+    result = service.stop_test(task_id)
+
+    await log_audit(
+        db=db,
+        action="test_stop",
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else None,
+        resource_type="test_task",
+        resource_id=str(task_id),
+        details={"source": "web_unity_runner"},
+    )
+
+    return result
+
+
+@router.get("/test-tasks/{task_id}/logs")
+async def get_unity_test_task_logs(
+    task_id: int,
+    tail_lines: int = Query(220, ge=20, le=1000),
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    service = UnityRunnerService(db)
+    return service.get_task_logs(task_id, tail_lines=tail_lines)
