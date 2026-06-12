@@ -107,6 +107,16 @@ namespace XRDataCollector.Data
         /// </summary>
         public float systemMemoryMB;
 
+        /// <summary>
+        /// 已加载 Texture 运行时内存估算（MB，不含 RenderTexture）
+        /// </summary>
+        public float textureMemoryMB = -1f;
+
+        /// <summary>
+        /// 已加载 RenderTexture 运行时内存估算（MB）
+        /// </summary>
+        public float renderTextureMemoryMB = -1f;
+
         #endregion
 
         #region Render Quality Metrics
@@ -165,6 +175,16 @@ namespace XRDataCollector.Data
         /// 碰撞体数量
         /// </summary>
         public int colliderCount;
+
+        /// <summary>
+        /// 后处理配置审计发现的警告数量
+        /// </summary>
+        public int postProcessingWarningCount = -1;
+
+        /// <summary>
+        /// 启发式检测到的碰撞体穿透对数量
+        /// </summary>
+        public int penetrationEventCount = -1;
 
         #endregion
 

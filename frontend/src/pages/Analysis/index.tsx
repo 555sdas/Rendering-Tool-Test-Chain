@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Space, Button } from 'antd';
+import { Card, Row, Col, Statistic, Tabs, Table, Tag, message, Space, Button, Dropdown } from 'antd';
+import type { MenuProps } from 'antd';
 import RenderQualityPanel from '@/components/RenderQualityPanel';
 import SessionDeviceInfoPanel from '@/components/SessionDeviceInfoPanel';
+import MetricSkippedPlaceholder from '@/components/MetricSkippedPlaceholder';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   LineChart,
@@ -20,21 +22,10 @@ import {
 } from 'recharts';
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport } from '@/api/analysis';
-import { reportsApi } from '@/api/reports';
+import { reportsApi, saveReportBlob, type ReportFormat } from '@/api/reports';
 import { sessionsApi, type PerformanceSample, type TestSession } from '@/api/sessions';
 
-const { Option } = Select;
 const { TabPane } = Tabs;
-
-const fpsData = [
-  { time: '0s', session1: 72, session2: 65, session3: 58 },
-  { time: '5s', session1: 70, session2: 63, session3: 55 },
-  { time: '10s', session1: 71, session2: 64, session3: 57 },
-  { time: '15s', session1: 68, session2: 62, session3: 54 },
-  { time: '20s', session1: 72, session2: 66, session3: 59 },
-  { time: '25s', session1: 69, session2: 64, session3: 56 },
-  { time: '30s', session1: 71, session2: 65, session3: 58 },
-];
 
 const frameTimeData = [
   { range: '< 11ms', count: 450 },
@@ -42,16 +33,6 @@ const frameTimeData = [
   { range: '13-16ms', count: 120 },
   { range: '16-20ms', count: 80 },
   { range: '> 20ms', count: 45 },
-];
-
-const resourceData = [
-  { time: '30s', cpu: 45, gpu: 62, memory: 3.2, vram: 2.1 },
-  { time: '35s', cpu: 48, gpu: 68, memory: 3.4, vram: 2.3 },
-  { time: '40s', cpu: 52, gpu: 72, memory: 3.6, vram: 2.5 },
-  { time: '45s', cpu: 50, gpu: 70, memory: 3.5, vram: 2.4 },
-  { time: '50s', cpu: 55, gpu: 75, memory: 3.8, vram: 2.7 },
-  { time: '55s', cpu: 53, gpu: 73, memory: 3.7, vram: 2.6 },
-  { time: '60s', cpu: 58, gpu: 78, memory: 4.0, vram: 2.9 },
 ];
 
 const comparisonData = [
@@ -70,28 +51,11 @@ const pieData = [
   { name: '长帧', value: 25, color: '#8b5cf6' },
 ];
 
-const fallbackSessionOptions = [
-  { value: 'session1', label: 'Quest 3 - VR大空间' },
-  { value: 'session2', label: 'Quest 2 - 标准场景' },
-  { value: 'session3', label: 'PICO 4 - 协同场景' },
-];
-
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function buildReportFilename(sessionId: number, sessionName?: string | null) {
+function buildReportFilename(sessionId: number, sessionName: string | null | undefined, format: ReportFormat) {
   const baseName = (sessionName || `session_${sessionId}_render_report`)
     .replace(/[\\/:*?"<>|]+/g, '_')
     .trim();
-  return `${baseName || `session_${sessionId}_render_report`}.html`;
+  return `${baseName || `session_${sessionId}_render_report`}.${format}`;
 }
 
 const Analysis: React.FC = () => {
@@ -102,44 +66,19 @@ const Analysis: React.FC = () => {
   const projectIdParam = searchParams.get('projectId');
   const projectId = projectIdParam ? Number(projectIdParam) : undefined;
   const projectFilterId = projectId && Number.isFinite(projectId) ? projectId : undefined;
+  const sessionId = sessionIdParam ? Number(sessionIdParam) : NaN;
   const returnTo =
     (location.state as { returnTo?: string } | null)?.returnTo ??
     (projectFilterId ? `/projects/${projectFilterId}` : '/projects');
-  const [selectedSessions, setSelectedSessions] = useState<string[]>(sessionIdParam ? [sessionIdParam] : ['session1', 'session2']);
-  const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
-  const [selectedSessionDetail, setSelectedSessionDetail] = useState<TestSession | null>(null);
+  const [currentSession, setCurrentSession] = useState<TestSession | null>(null);
   const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
   const [exportingReport, setExportingReport] = useState(false);
 
   useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        const response = await sessionsApi.list({ limit: 50, project_id: projectFilterId });
-        if (response.items.length > 0) {
-          const options = response.items.map((session) => ({
-            value: String(session.id),
-            label: session.name,
-          }));
-          setSessionOptions(options);
-          const preferredSessionId =
-            sessionIdParam && options.some((option) => option.value === sessionIdParam)
-              ? sessionIdParam
-              : options[0].value;
-          setSelectedSessions([preferredSessionId]);
-        }
-      } catch {
-        message.warning('未能读取后端会话，当前显示内置分析样例');
-      }
-    };
-    loadSessions();
-  }, [projectFilterId, sessionIdParam]);
-
-  useEffect(() => {
-    const sessionId = Number(selectedSessions[0]);
     if (!Number.isFinite(sessionId)) {
       setFullReport(null);
-      setSelectedSessionDetail(null);
+      setCurrentSession(null);
       setSampleChartData([]);
       return;
     }
@@ -152,7 +91,7 @@ const Analysis: React.FC = () => {
           sessionsApi.getSamples(sessionId, { limit: 300 }),
         ]);
         setFullReport(report);
-        setSelectedSessionDetail(sessionDetail);
+        setCurrentSession(sessionDetail);
         setSampleChartData(samples.slice(0, 120).map((sample: PerformanceSample, index) => ({
           time: `${index}s`,
           fps: Number(sample.fps || 0),
@@ -165,12 +104,12 @@ const Analysis: React.FC = () => {
       }
     };
     loadAnalysis();
-  }, [selectedSessions]);
+  }, [sessionId]);
 
-  const selectedSessionId = Number(selectedSessions[0]);
-  const canExportReport = Number.isFinite(selectedSessionId);
+  const canExportReport = Number.isFinite(sessionId);
+  const currentSessionName = currentSession?.name || fullReport?.session_info?.name;
 
-  const handleExportReport = async () => {
+  const handleExportReport = async (format: ReportFormat) => {
     if (!canExportReport) {
       message.warning('请先选择一个后端测试会话');
       return;
@@ -178,20 +117,26 @@ const Analysis: React.FC = () => {
 
     setExportingReport(true);
     try {
-      const title = `${selectedSessionDetail?.name || fullReport?.session_info.name || `会话 ${selectedSessionId}`} 渲染测试报告`;
-      const report = await reportsApi.generateFromSession(selectedSessionId, {
+      const title = `${currentSessionName || `会话 ${sessionId}`} 详细测试报告`;
+      const report = await reportsApi.generateFromSession(sessionId, {
         title,
-        description: 'Web 端导出的渲染结果报告',
+        description: 'Web 端导出的详细渲染测试报告',
+        format,
       });
       const { blob, filename } = await reportsApi.download(report.id);
-      saveBlob(blob, filename || buildReportFilename(selectedSessionId, selectedSessionDetail?.name));
-      message.success('报表已导出');
+      saveReportBlob(blob, filename || buildReportFilename(sessionId, currentSessionName, format));
+      message.success(`报表已导出（${format.toUpperCase()}）`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '报表导出失败');
     } finally {
       setExportingReport(false);
     }
   };
+
+  const exportMenuItems: MenuProps['items'] = [
+    { key: 'html', label: '导出 HTML 详细报告' },
+    { key: 'pdf', label: '导出 PDF 详细报告' },
+  ];
 
   const comparisonColumns = [
     {
@@ -244,7 +189,7 @@ const Analysis: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <Space>
+        <Space wrap>
           <Button
             type="text"
             icon={<ArrowLeftOutlined />}
@@ -254,51 +199,63 @@ const Analysis: React.FC = () => {
           </Button>
           <h2 style={{ margin: 0 }}>性能分析</h2>
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
+          {Number.isFinite(sessionId) ? (
+            <>
+              <Tag color="processing">#{sessionId}</Tag>
+              {currentSessionName && <Tag>{currentSessionName}</Tag>}
+            </>
+          ) : (
+            <Tag color="default">未指定会话</Tag>
+          )}
         </Space>
-        <Space>
-          <Button
-            icon={<DownloadOutlined />}
-            loading={exportingReport}
-            disabled={!canExportReport}
-            onClick={handleExportReport}
-          >
+        <Dropdown
+          menu={{
+            items: exportMenuItems,
+            onClick: ({ key }) => handleExportReport(key as ReportFormat),
+          }}
+          disabled={!canExportReport}
+        >
+          <Button icon={<DownloadOutlined />} loading={exportingReport} disabled={!canExportReport}>
             导出报表
           </Button>
-          <Select
-            mode="multiple"
-            placeholder="选择对比会话"
-            value={selectedSessions}
-            onChange={setSelectedSessions}
-            style={{ width: 400 }}
-          >
-            {sessionOptions.map((opt) => (
-              <Option key={opt.value} value={opt.value}>
-                {opt.label}
-              </Option>
-            ))}
-          </Select>
-        </Space>
+        </Dropdown>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="平均FPS" value={fullReport?.fps_analysis?.mean ?? 70.3} precision={1} suffix="fps" valueStyle={{ color: '#3b82f6' }} />
+            {fullReport?.section_status?.frame_rate === 'skipped' ? (
+              <Statistic title="平均FPS" value="跳过" />
+            ) : (
+              <Statistic title="平均FPS" value={fullReport?.fps_analysis?.mean ?? '-'} precision={1} suffix="fps" valueStyle={{ color: '#3b82f6' }} />
+            )}
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="P95帧时间" value={fullReport?.frame_time_analysis?.p95_ms ?? 14.2} precision={1} suffix="ms" valueStyle={{ color: '#f59e0b' }} />
+            {fullReport?.section_status?.frame_time === 'skipped' ? (
+              <Statistic title="P95帧时间" value="跳过" />
+            ) : (
+              <Statistic title="P95帧时间" value={fullReport?.frame_time_analysis?.p95_ms ?? '-'} precision={1} suffix="ms" valueStyle={{ color: '#f59e0b' }} />
+            )}
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="掉帧率" value={((fullReport?.stability_summary?.dropped_frame_rate ?? 0.032) * 100)} precision={1} suffix="%" valueStyle={{ color: '#ef4444' }} />
+            {fullReport?.section_status?.frame_time === 'skipped' ? (
+              <Statistic title="掉帧率" value="跳过" />
+            ) : (
+              <Statistic title="掉帧率" value={((fullReport?.stability_summary?.dropped_frame_rate ?? 0) * 100)} precision={1} suffix="%" valueStyle={{ color: '#ef4444' }} />
+            )}
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="长帧次数" value={fullReport?.stability_summary?.long_frame_count ?? 28} valueStyle={{ color: '#8b5cf6' }} />
+            {fullReport?.section_status?.frame_time === 'skipped' ? (
+              <Statistic title="长帧次数" value="跳过" />
+            ) : (
+              <Statistic title="长帧次数" value={fullReport?.stability_summary?.long_frame_count ?? 0} valueStyle={{ color: '#8b5cf6' }} />
+            )}
           </Card>
         </Col>
       </Row>
@@ -306,34 +263,27 @@ const Analysis: React.FC = () => {
       <Tabs defaultActiveKey="fps">
         <TabPane tab="FPS趋势" key="fps">
           <Card>
+            {fullReport?.section_status?.frame_rate === 'skipped' ? (
+              <MetricSkippedPlaceholder title="FPS 未纳入本次测试" />
+            ) : (
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={fpsChartData.length ? fpsChartData : fpsData}>
+              <LineChart data={fpsChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis domain={[0, 90]} />
                 <Tooltip />
                 <Legend />
-                {sampleChartData.length ? (
-                  <Line type="monotone" dataKey="fps" stroke="#3b82f6" name="FPS" strokeWidth={2} dot={false} />
-                ) : (
-                  <>
-                    {selectedSessions.includes('session1') && (
-                      <Line type="monotone" dataKey="session1" stroke="#3b82f6" name="Quest 3" strokeWidth={2} dot={false} />
-                    )}
-                    {selectedSessions.includes('session2') && (
-                      <Line type="monotone" dataKey="session2" stroke="#10b981" name="Quest 2" strokeWidth={2} dot={false} />
-                    )}
-                    {selectedSessions.includes('session3') && (
-                      <Line type="monotone" dataKey="session3" stroke="#f59e0b" name="PICO 4" strokeWidth={2} dot={false} />
-                    )}
-                  </>
-                )}
+                <Line type="monotone" dataKey="fps" stroke="#3b82f6" name="FPS" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
+            )}
           </Card>
         </TabPane>
 
         <TabPane tab="帧时间分布" key="frametime">
+          {fullReport?.section_status?.frame_time === 'skipped' ? (
+            <MetricSkippedPlaceholder title="帧时间未纳入本次测试" />
+          ) : (
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={16}>
               <Card title="帧时间直方图">
@@ -372,12 +322,16 @@ const Analysis: React.FC = () => {
               </Card>
             </Col>
           </Row>
+          )}
         </TabPane>
 
         <TabPane tab="资源占用" key="resources">
           <Card>
+            {(fullReport?.section_status?.cpu === 'skipped' && fullReport?.section_status?.gpu === 'skipped' && fullReport?.section_status?.memory === 'skipped') ? (
+              <MetricSkippedPlaceholder title="资源占用指标未纳入本次测试" />
+            ) : (
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={resourceChartData.length ? resourceChartData : resourceData}>
+              <LineChart data={resourceChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis yAxisId="left" domain={[0, 100]} />
@@ -390,6 +344,7 @@ const Analysis: React.FC = () => {
                 <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存 (GB)" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
+            )}
           </Card>
         </TabPane>
 
@@ -409,7 +364,11 @@ const Analysis: React.FC = () => {
         </TabPane>
 
         <TabPane tab="设备信息" key="device-info">
-          <SessionDeviceInfoPanel sessionInfo={fullReport?.session_info} />
+          {fullReport?.section_status?.device_info === 'skipped' ? (
+            <MetricSkippedPlaceholder title="设备信息未纳入本次测试" />
+          ) : (
+            <SessionDeviceInfoPanel sessionInfo={fullReport?.session_info} />
+          )}
         </TabPane>
       </Tabs>
     </div>

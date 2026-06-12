@@ -123,8 +123,22 @@
 }
 
 .rq-metric-list__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: #475569;
   font-size: 13px;
+}
+
+.rq-metric-list__help {
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: help;
+  transition: color 0.2s;
+}
+
+.rq-metric-list__help:hover {
+  color: #1677ff;
 }
 
 .rq-metric-list__value {
@@ -133,6 +147,42 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.rq-metric-list__result {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 55%;
+  text-align: right;
+}
+
+.rq-metric-list__reason {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.rq-metric-list__value--missing {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.rq-metric-list__value--unavailable {
+  color: #597ef7;
+  font-weight: 500;
+}
+
+.rq-metric-list__value--failed {
+  color: #ff4d4f;
+  font-weight: 500;
+}
+
+.rq-metric-list__value--skipped {
+  color: #bfbfbf;
+  font-weight: 500;
 }
 
 .rq-deduction-list li {
@@ -153,6 +203,29 @@
 .rq-footnote {
   margin: 16px 0 0;
   font-size: 12px;
+}
+
+.rq-scoring-definition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.rq-scoring-definition-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+}
+
+.rq-scoring-definition-item strong {
+  color: #111827;
+  font-variant-numeric: tabular-nums;
 }
 
 .rq-empty {

@@ -1,8 +1,10 @@
+import io
 import os
+import zipfile
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel, Field
@@ -36,6 +38,13 @@ class TestReportUpdate(BaseModel):
 class GenerateSessionReportRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    format: str = Field(default=ReportFormat.HTML.value, pattern="^(html|pdf)$")
+
+
+class BatchGenerateReportsRequest(BaseModel):
+    session_ids: list[int] = Field(..., min_length=1, max_length=50)
+    format: str = Field(default=ReportFormat.HTML.value, pattern="^(html|pdf)$")
+    title_prefix: Optional[str] = None
 
 
 class TestReportResponse(BaseModel):
@@ -174,15 +183,17 @@ async def generate_report_from_session(
     db: Session = Depends(get_db),
 ):
     service = ReportGenerationService(db)
+    payload = report_data or GenerateSessionReportRequest()
     try:
-        report = service.generate_session_html_report(
+        report = service.generate_session_report(
             test_session_id=session_id,
             creator_id=current_user.id,
-            title=report_data.title if report_data else None,
-            description=report_data.description if report_data else None,
+            title=payload.title,
+            description=payload.description,
+            report_format=payload.format,
         )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     await log_audit(
         db=db,
@@ -195,6 +206,61 @@ async def generate_report_from_session(
         details={"session_id": session_id, "file_path": report.file_path},
     )
     return report
+
+
+@router.post("/batch-generate")
+async def batch_generate_reports(
+    request: Request,
+    payload: BatchGenerateReportsRequest,
+    current_user: User = Depends(require_permission(Permission.REPORT_CREATE)),
+    db: Session = Depends(get_db),
+):
+    service = ReportGenerationService(db)
+    zip_buffer = io.BytesIO()
+    generated: list[dict] = []
+    errors: list[dict] = []
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for session_id in payload.session_ids:
+            try:
+                title = None
+                if payload.title_prefix:
+                    title = f"{payload.title_prefix} - 会话 #{session_id}"
+                report = service.generate_session_report(
+                    test_session_id=session_id,
+                    creator_id=current_user.id,
+                    title=title,
+                    report_format=payload.format,
+                )
+                if not report.file_path or not os.path.isfile(report.file_path):
+                    raise ValueError("报告文件未生成")
+                arcname = os.path.basename(report.file_path)
+                archive.write(report.file_path, arcname=arcname)
+                generated.append({"session_id": session_id, "report_id": report.id, "filename": arcname})
+            except Exception as exc:
+                errors.append({"session_id": session_id, "error": str(exc)})
+
+    if not generated:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"message": "批量导出失败", "errors": errors})
+
+    zip_buffer.seek(0)
+    await log_audit(
+        db=db,
+        action="report_generate",
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else None,
+        resource_type="test_report_batch",
+        resource_id=",".join(str(item["session_id"]) for item in generated),
+        details={"format": payload.format, "generated": generated, "errors": errors},
+    )
+
+    filename = f"test_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/{report_id}", response_model=TestReportResponse)

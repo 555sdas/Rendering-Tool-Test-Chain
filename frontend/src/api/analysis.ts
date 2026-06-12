@@ -1,4 +1,5 @@
 import apiClient from './client';
+import type { TestScope, TestScopeSummary } from '@/lib/testScope';
 
 export interface FpsAnalysis {
   count: number;
@@ -60,14 +61,53 @@ export interface ThresholdViolation {
   sample_count: number;
 }
 
+export type QualityMetricStatusValue = 'skipped' | 'available' | 'unavailable' | 'missing' | 'failed';
+
+export interface QualityMetricStatusEntry {
+  status: QualityMetricStatusValue;
+  reason_code?: string | null;
+  reason_label?: string | null;
+  value_keys?: string[];
+  valid_sample_count?: number;
+  inferred?: boolean;
+  measurement_tier?: string | null;
+  implementation_status?: string | null;
+  provider?: string | null;
+}
+
+export interface QualityCoverageSummary {
+  selected: number;
+  available: number;
+  unavailable: number;
+  missing: number;
+  failed: number;
+  skipped: number;
+}
+
+export type ScoringCategoryId = 'lighting' | 'material' | 'post_processing' | 'physics';
+
+export interface ScoringDefinition {
+  schema_version: number;
+  category_weights: Record<ScoringCategoryId, number>;
+}
+
+export interface ScoreFormulaSummary {
+  effective_total_weight: number;
+  included_categories: ScoringCategoryId[];
+  normalized: boolean;
+}
+
 export interface RenderQualityCategory {
   key: string;
   name: string;
   weight: number;
+  included_in_overall_score?: boolean;
   score: number | null;
   tested?: boolean;
   status: string;
   metrics: Record<string, number | string | null>;
+  metric_status?: Record<string, QualityMetricStatusEntry>;
+  coverage?: QualityCoverageSummary;
   deductions: Array<{
     points: number;
     reason: string;
@@ -83,7 +123,16 @@ export interface RenderQualityAssessment {
     description: string;
   };
   overall_score: number | null;
+  overall_score_reason?: string | null;
   grade: string;
+  scoring_definition?: ScoringDefinition;
+  scoring_definition_source?: 'session_snapshot' | 'builtin_default' | 'builtin_default_fallback';
+  scoring_definition_fallback_reason?: string | null;
+  score_formula?: ScoreFormulaSummary;
+  data_completeness?: number | null;
+  confidence_grade?: string;
+  coverage_summary?: QualityCoverageSummary;
+  metric_status?: Record<string, QualityMetricStatusEntry>;
   categories: RenderQualityCategory[];
   rubric: Record<string, string>;
   evidence: {
@@ -93,11 +142,18 @@ export interface RenderQualityAssessment {
     has_runtime_quality_metrics: boolean;
     enabled_quality_checks?: Record<string, boolean>;
     tested_category_count?: number;
+    data_completeness?: number | null;
+    confidence_grade?: string;
+    coverage_summary?: QualityCoverageSummary;
+    has_quality_metric_manifest?: boolean;
     note: string;
   };
 }
 
 export interface FullReport {
+  test_scope?: TestScope;
+  test_scope_summary?: TestScopeSummary;
+  section_status?: Record<string, 'selected' | 'skipped' | 'unavailable' | 'pending'>;
   session_info: {
     id: number;
     name: string;

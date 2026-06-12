@@ -1,5 +1,7 @@
 import apiClient from './client';
 
+export type ReportFormat = 'html' | 'pdf';
+
 export interface TestReport {
   id: number;
   title: string;
@@ -19,6 +21,13 @@ export interface TestReport {
 export interface GenerateSessionReportRequest {
   title?: string;
   description?: string;
+  format?: ReportFormat;
+}
+
+export interface BatchGenerateReportsRequest {
+  session_ids: number[];
+  format?: ReportFormat;
+  title_prefix?: string;
 }
 
 export interface ReportDownload {
@@ -45,7 +54,10 @@ export const reportsApi = {
     sessionId: number,
     data?: GenerateSessionReportRequest,
   ): Promise<TestReport> => {
-    const response = await apiClient.post<TestReport>(`/test-reports/generate-from-session/${sessionId}`, data || {});
+    const response = await apiClient.post<TestReport>(`/test-reports/generate-from-session/${sessionId}`, {
+      format: 'html',
+      ...data,
+    });
     return response.data;
   },
 
@@ -58,4 +70,25 @@ export const reportsApi = {
       filename: extractFilename(response.headers['content-disposition']),
     };
   },
+
+  batchGenerate: async (payload: BatchGenerateReportsRequest): Promise<ReportDownload> => {
+    const response = await apiClient.post<Blob>('/test-reports/batch-generate', payload, {
+      responseType: 'blob',
+    });
+    return {
+      blob: response.data,
+      filename: extractFilename(response.headers['content-disposition']),
+    };
+  },
 };
+
+export function saveReportBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

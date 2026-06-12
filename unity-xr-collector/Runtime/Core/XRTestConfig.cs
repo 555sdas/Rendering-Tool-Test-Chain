@@ -171,6 +171,12 @@ namespace XRDataCollector.Core
         [Tooltip("采集设备信息")]
         public bool collectDeviceInfo = true;
 
+        [Tooltip("采集 Draw Call / 三角面 / 顶点等渲染统计")]
+        public bool collectRenderingStats = true;
+
+        [Tooltip("采集渲染质量场景指标")]
+        public bool collectRenderQuality = true;
+
         [Tooltip("测试光照与阴影指标")]
         public bool testLightingQuality = true;
 

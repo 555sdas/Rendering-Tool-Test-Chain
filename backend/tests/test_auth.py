@@ -178,7 +178,7 @@ class TestAuth:
 
         response = client.post(
             "/api/v1/auth/refresh",
-            params={"refresh_token": refresh_token},
+            json={"refresh_token": refresh_token},
         )
         assert response.status_code == 200
         data = response.json()
@@ -188,6 +188,20 @@ class TestAuth:
     def test_refresh_token_invalid(self, client):
         response = client.post(
             "/api/v1/auth/refresh",
-            params={"refresh_token": "invalid_token"},
+            json={"refresh_token": "invalid_token"},
         )
         assert response.status_code == 401
+
+    def test_refresh_token_query_parameter_remains_compatible(self, client, test_user):
+        login_response = client.post(
+            "/api/v1/auth/login",
+            data={"username": "testuser", "password": "TestPassword123"},
+        )
+        refresh_token = login_response.json()["refresh_token"]
+
+        response = client.post(
+            "/api/v1/auth/refresh",
+            params={"refresh_token": refresh_token},
+        )
+
+        assert response.status_code == 200

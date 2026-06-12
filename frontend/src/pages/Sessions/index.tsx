@@ -22,7 +22,9 @@ import {
   ClockCircleOutlined,
   DesktopOutlined,
   EyeOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
+import { reportsApi, saveReportBlob, type ReportFormat } from '@/api/reports';
 import type { TestSession } from '@/types';
 import { sessionsApi } from '@/api/sessions';
 import { formatDateTime, getApiDateTime } from '@/lib/datetime';
@@ -243,6 +245,8 @@ const Sessions: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedSession, setSelectedSession] = useState<TestSession | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [batchExporting, setBatchExporting] = useState(false);
 
   const mapSession = useCallback((session: TestSession): TestSession => {
     const systemMemoryMb = getConfigNumber(session.config, ['system_memory_mb', 'systemMemorySize']);
@@ -298,6 +302,27 @@ const Sessions: React.FC = () => {
   const handleViewDetail = (session: TestSession) => {
     setSelectedSession(session);
     setIsDetailOpen(true);
+  };
+
+  const handleBatchExport = async (format: ReportFormat) => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先勾选要导出的测试记录');
+      return;
+    }
+    setBatchExporting(true);
+    try {
+      const { blob, filename } = await reportsApi.batchGenerate({
+        session_ids: selectedRowKeys.map((key) => Number(key)),
+        format,
+        title_prefix: '批量测试报告',
+      });
+      saveReportBlob(blob, filename || `test_reports_${Date.now()}.zip`);
+      message.success(`已批量导出 ${selectedRowKeys.length} 份 ${format.toUpperCase()} 报告`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '批量导出失败');
+    } finally {
+      setBatchExporting(false);
+    }
   };
 
   const getDuration = (start: string | undefined, end: string | null | undefined, durationSeconds?: number | null) => {
@@ -397,6 +422,21 @@ const Sessions: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>测试会话</h2>
         <Space>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={batchExporting}
+            disabled={selectedRowKeys.length === 0}
+            onClick={() => handleBatchExport('html')}
+          >
+            批量导出 HTML
+          </Button>
+          <Button
+            loading={batchExporting}
+            disabled={selectedRowKeys.length === 0}
+            onClick={() => handleBatchExport('pdf')}
+          >
+            批量导出 PDF
+          </Button>
           <Button onClick={loadSessions}>
             刷新
           </Button>
@@ -445,6 +485,10 @@ const Sessions: React.FC = () => {
         rowKey="id"
         pagination={{ pageSize: 10 }}
         loading={loading}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
       />
 
       <Modal

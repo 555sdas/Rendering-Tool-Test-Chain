@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
@@ -30,10 +30,19 @@ class MetricChecks(BaseModel):
     device_info: bool = True
 
 
+class TestScopeRequest(BaseModel):
+    schema_version: int = Field(default=1, ge=1)
+    source: str | None = None
+    basic_metrics: dict[str, bool] = Field(default_factory=dict)
+    quality_categories: dict[str, bool] = Field(default_factory=dict)
+    quality_metrics: dict[str, bool] = Field(default_factory=dict)
+
+
 class UnityTestStartRequest(BaseModel):
     project_id: int = Field(..., gt=0)
     unity_engine_id: str = Field(..., min_length=1)
     scene_resource_id: str = Field(..., min_length=1)
+    test_scope: TestScopeRequest | None = None
     quality_checks: QualityChecks = Field(default_factory=QualityChecks)
     quality_metric_checks: dict[str, bool] = Field(default_factory=dict)
     metric_checks: MetricChecks = Field(default_factory=MetricChecks)
@@ -42,6 +51,28 @@ class UnityTestStartRequest(BaseModel):
     metrics_duration_seconds: float = Field(30.0, ge=1.0, le=600.0)
     batchmode: bool = False
     ensure_plugin: bool = True
+
+
+@router.get("/test-metrics/catalog")
+async def get_test_metrics_catalog(
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    return UnityRunnerService(db).get_test_metrics_catalog()
+
+
+@router.get("/test-metrics/default-scope")
+async def get_default_test_scope_for_run(
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    scope = UnityRunnerService(db).get_default_test_scope_for_run()
+    from app.services.test_scope_service import TestScopeService
+
+    return {
+        "default_scope": scope,
+        "scope_summary": TestScopeService.build_scope_summary(scope),
+    }
 
 
 @router.get("/engines")
@@ -75,6 +106,7 @@ async def start_unity_test_task(
         project_id=payload.project_id,
         unity_engine_id=payload.unity_engine_id,
         scene_resource_id=payload.scene_resource_id,
+        test_scope=payload.test_scope.model_dump() if payload.test_scope else None,
         quality_checks=payload.quality_checks.model_dump(),
         quality_metric_checks=payload.quality_metric_checks,
         metric_checks=payload.metric_checks.model_dump(),

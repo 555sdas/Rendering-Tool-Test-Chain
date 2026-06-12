@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { ApiError } from '@/types';
+import { ApiError, LoginResponse } from '@/types';
 import { useAuthStore } from '@/stores/authStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -15,7 +15,8 @@ const apiClient: AxiosInstance = axios.create({
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = localStorage.getItem('xr_token');
-    if (token && config.headers) {
+    const isAuthRequest = config.url?.includes('/auth/login') || config.url?.includes('/auth/refresh');
+    if (token && config.headers && !isAuthRequest) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -25,7 +26,40 @@ apiClient.interceptors.request.use(
   }
 );
 
-let refreshPromise: Promise<boolean> | null = null;
+type RetryableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+
+let refreshPromise: Promise<string | null> | null = null;
+
+function clearLocalAuth(): void {
+  localStorage.removeItem('xr_token');
+  localStorage.removeItem('xr_refresh_token');
+  localStorage.removeItem('xr_user');
+  useAuthStore.setState({ token: null, user: null, isAuthenticated: false, error: null });
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = localStorage.getItem('xr_refresh_token');
+  if (!refreshToken) return null;
+
+  try {
+    // 使用无拦截器客户端，避免刷新请求再次进入普通 401 重放链路。
+    const response = await axios.post<LoginResponse>(
+      `${API_BASE_URL}/auth/refresh`,
+      { refresh_token: refreshToken },
+      { timeout: 30000 },
+    );
+    localStorage.setItem('xr_token', response.data.access_token);
+    localStorage.setItem('xr_refresh_token', response.data.refresh_token);
+    useAuthStore.setState({
+      token: response.data.access_token,
+      isAuthenticated: true,
+      error: null,
+    });
+    return response.data.access_token;
+  } catch {
+    return null;
+  }
+}
 
 apiClient.interceptors.response.use(
   (response) => response,
@@ -36,26 +70,25 @@ apiClient.interceptors.response.use(
 
       if (status === 401) {
         const isRefreshRequest = error.config?.url?.includes('/auth/refresh');
+        const requestConfig = error.config as RetryableRequestConfig | undefined;
 
-        if (!isRefreshRequest) {
-          // 多个并发 401 请求共享同一个刷新 Promise，避免竞态登出
+        if (!isRefreshRequest && requestConfig && !requestConfig._retry) {
+          requestConfig._retry = true;
+
+          // 多个并发 401 请求共享同一个刷新 Promise，并直接获得同一枚新 token。
           if (!refreshPromise) {
-            refreshPromise = useAuthStore.getState().refreshAuth().finally(() => {
+            refreshPromise = refreshAccessToken().finally(() => {
               refreshPromise = null;
             });
           }
 
-          const refreshed = await refreshPromise;
-          if (refreshed && error.config) {
-            const newToken = localStorage.getItem('xr_token');
-            if (newToken && error.config.headers) {
-              error.config.headers.Authorization = `Bearer ${newToken}`;
-            }
-            return apiClient.request(error.config);
+          const newToken = await refreshPromise;
+          if (newToken) {
+            requestConfig.headers.Authorization = `Bearer ${newToken}`;
+            return apiClient.request(requestConfig);
           }
 
-          // 刷新失败 → 登出
-          useAuthStore.getState().logout();
+          clearLocalAuth();
         }
       }
 

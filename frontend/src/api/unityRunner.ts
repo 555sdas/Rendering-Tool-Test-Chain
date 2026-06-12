@@ -1,5 +1,6 @@
 import apiClient from './client';
 import type { TestSession } from './sessions';
+import type { MetricCatalog, TestScope, TestScopeSummary } from '@/lib/testScope';
 
 export interface UnityEngineResource {
   id: string;
@@ -48,6 +49,7 @@ export interface UnityTestStartRequest {
   project_id: number;
   unity_engine_id: string;
   scene_resource_id: string;
+  test_scope?: TestScope;
   quality_checks: UnityQualityChecks;
   quality_metric_checks?: Record<string, boolean>;
   metric_checks?: Partial<UnityMetricChecks>;
@@ -138,6 +140,10 @@ export interface UnityRealtimeProgress {
   render_pipeline: string;
   screen_resolution: string;
   received_at?: string;
+  test_scope_version?: number;
+  test_scope_summary?: TestScopeSummary;
+  selected_metric_ids?: string[];
+  skipped_metric_ids?: string[];
 }
 
 export function createUnityProgressWebSocket(taskId: number): WebSocket {
@@ -150,6 +156,18 @@ export function createUnityProgressWebSocket(taskId: number): WebSocket {
 }
 
 export const unityRunnerApi = {
+  getTestMetricsCatalog: async (): Promise<MetricCatalog> => {
+    const response = await apiClient.get<MetricCatalog>('/unity-runner/test-metrics/catalog');
+    return response.data;
+  },
+
+  getDefaultTestScope: async (): Promise<{ default_scope: TestScope; scope_summary: TestScopeSummary }> => {
+    const response = await apiClient.get<{ default_scope: TestScope; scope_summary: TestScopeSummary }>(
+      '/unity-runner/test-metrics/default-scope',
+    );
+    return response.data;
+  },
+
   listEngines: async (): Promise<UnityEngineResource[]> => {
     const response = await apiClient.get<{ items: UnityEngineResource[] }>('/unity-runner/engines');
     return response.data.items;

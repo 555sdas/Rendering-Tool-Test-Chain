@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User, UserStatus
-from app.schemas.user import UserCreate, UserResponse, Token, PasswordChange
+from app.schemas.user import UserCreate, UserResponse, Token, PasswordChange, RefreshTokenRequest
 from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token
 from app.core.permissions import get_current_user, Permission, require_permission
 from app.services.audit_service import log_audit
@@ -93,8 +93,13 @@ async def login(
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
-    payload = decode_token(refresh_token)
+async def refresh_token(
+    body: RefreshTokenRequest | None = None,
+    legacy_refresh_token: str | None = Query(None, alias="refresh_token"),
+    db: Session = Depends(get_db),
+):
+    supplied_token = body.refresh_token if body else legacy_refresh_token
+    payload = decode_token(supplied_token or "")
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

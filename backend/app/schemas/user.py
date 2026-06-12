@@ -48,6 +48,10 @@ class TokenPayload(BaseModel):
     exp: datetime | None = None
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8, max_length=100)

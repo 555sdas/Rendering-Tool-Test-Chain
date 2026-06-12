@@ -200,6 +200,48 @@ def test_open_project_task_is_dispatched_to_existing_editor(db, tmp_path):
     assert json.loads(inbox.read_text(encoding="utf-8"))["configPath"] == str(task_config_path)
 
 
+def test_existing_editor_refreshes_stale_collector_before_dispatch(db, tmp_path, monkeypatch):
+    import os
+    import time as stdlib_time
+
+    project_path = tmp_path / "DemoProject"
+    package_path = tmp_path / "unity-xr-collector"
+    source = package_path / "Runtime" / "Collector.cs"
+    source.parent.mkdir(parents=True)
+    source.write_text("class Collector {}", encoding="utf-8")
+
+    script_assemblies = project_path / "Library" / "ScriptAssemblies"
+    script_assemblies.mkdir(parents=True)
+    runtime_assembly = script_assemblies / "XRDataCollector.Runtime.dll"
+    editor_assembly = script_assemblies / "XRDataCollector.Editor.dll"
+    runtime_assembly.write_text("old", encoding="utf-8")
+    editor_assembly.write_text("old", encoding="utf-8")
+    stale_at = source.stat().st_mtime - 10
+    os.utime(runtime_assembly, (stale_at, stale_at))
+    os.utime(editor_assembly, (stale_at, stale_at))
+
+    service = UnityRunnerService(db)
+
+    def compile_after_marker(_seconds):
+        compiled_at = stdlib_time.time() + 10
+        os.utime(runtime_assembly, (compiled_at, compiled_at))
+        os.utime(editor_assembly, (compiled_at, compiled_at))
+
+    monkeypatch.setattr("app.services.unity_runner_service.time.sleep", compile_after_marker)
+    service._ensure_existing_editor_plugin_current(
+        {
+            "project_path": str(project_path),
+            "collector_package_path": str(package_path),
+        },
+        None,
+        timeout_seconds=2,
+    )
+
+    marker = project_path / "Assets" / "XRDataCollectorGenerated" / "Editor" / "PackageRefreshMarker.cs"
+    assert marker.exists()
+    assert "SourceTimestamp" in marker.read_text(encoding="utf-8")
+
+
 def test_unity_progress_requires_device_token_and_is_cached(client, db, admin_auth_headers):
     from app.config import get_settings
     from app.models.test_task import TestTask

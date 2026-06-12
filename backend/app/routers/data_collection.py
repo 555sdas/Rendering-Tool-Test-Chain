@@ -67,6 +67,8 @@ class PerformanceSampleBatchCreate(BaseModel):
     session: Optional[dict] = None
     uploadTime: Optional[datetime] = None
     sampleCount: Optional[int] = None
+    qualityMetricManifest: Optional[list[dict]] = None
+    quality_metric_manifest: Optional[list[dict]] = None
 
 
 class PlatformSessionAutoCreate(BaseModel):
@@ -248,6 +250,8 @@ async def auto_start_platform_test_session(
     run_index = session_count + 1
     session_name = f"#{run_index}"
 
+    from app.services.system_settings_service import SystemSettingsService
+
     config = dict(session_data.config or {})
     config.update(
         {
@@ -258,6 +262,7 @@ async def auto_start_platform_test_session(
             "session_sequence": run_index,
         }
     )
+    config = SystemSettingsService().attach_scoring_definition_snapshot(config)
 
     service = DataCollectionService(db)
     session = service.create_test_session(
@@ -341,6 +346,8 @@ async def create_test_session(
     current_user: User = Depends(require_permission(Permission.TEST_EXECUTE)),
     db: Session = Depends(get_db),
 ):
+    from app.services.system_settings_service import SystemSettingsService
+
     service = DataCollectionService(db)
     session = service.create_test_session(
         name=session_data.name,
@@ -352,7 +359,7 @@ async def create_test_session(
         scene_id=session_data.scene_id,
         user_id=current_user.id,
         project_id=session_data.project_id,
-        config=session_data.config,
+        config=SystemSettingsService().attach_scoring_definition_snapshot(session_data.config),
     )
 
     await log_audit(
@@ -498,6 +505,10 @@ async def add_performance_samples_batch(
             if not first_device_info:
                 first_device_info = device_info
 
+        graphics_memory_mb = _first_present(item, "graphics_memory_mb", "graphicsMemoryMB")
+        if graphics_memory_mb is not None:
+            extra_metrics["graphics_memory_mb"] = graphics_memory_mb
+
         timestamp = _parse_timestamp(item.get("timestamp"))
         timestamps.append(timestamp)
         elapsed_time = _parse_float(
@@ -523,7 +534,7 @@ async def add_performance_samples_batch(
                 triangle_count=_first_present(item, "triangle_count", "triangles"),
                 vertex_count=_first_present(item, "vertex_count", "vertices"),
                 set_pass_calls=_first_present(item, "set_pass_calls", "setPassCalls"),
-                texture_memory_mb=_first_present(item, "texture_memory_mb", "textureMemoryMB", "graphicsMemoryMB"),
+                texture_memory_mb=_first_present(item, "texture_memory_mb", "textureMemoryMB"),
                 mesh_memory_mb=_first_present(item, "mesh_memory_mb", "meshMemoryMB"),
                 render_texture_memory_mb=_first_present(item, "render_texture_memory_mb", "renderTextureMemoryMB"),
                 gc_collect_count=_first_present(item, "gc_collect_count", "gcCollectCount"),
@@ -540,6 +551,10 @@ async def add_performance_samples_batch(
     upload_session = payload.session or {}
     if not isinstance(upload_session, dict):
         upload_session = {}
+
+    manifest = payload.qualityMetricManifest or payload.quality_metric_manifest
+    if manifest:
+        _merge_session_config(session, {"quality_metric_manifest": manifest})
 
     if timestamps:
         first_ts = min(timestamps)

@@ -12,6 +12,7 @@ from app.core.security import decode_token
 from app.database import get_db
 from app.models.test_task import TestTask
 from app.models.user import User
+from app.services.test_scope_service import TestScopeService
 from app.services.unity_runner_service import UnityRunnerService
 
 
@@ -90,6 +91,13 @@ async def receive_progress(
     data["type"] = "unity_progress"
     data["received_at"] = datetime.utcnow().isoformat() + "Z"
     task = db.query(TestTask).filter(TestTask.id == task_id).first()
+    if task and isinstance(task.config, dict):
+        scope = TestScopeService.infer_scope_from_session_config(task.config)
+        summary = task.config.get("test_scope_summary") or TestScopeService.build_scope_summary(scope)
+        data["test_scope_version"] = scope.get("schema_version", 1)
+        data["test_scope_summary"] = summary
+        data["selected_metric_ids"] = summary.get("selected_ids", [])
+        data["skipped_metric_ids"] = summary.get("skipped_ids", [])
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unity 测试任务不存在")
     summary = dict(task.result_summary or {})

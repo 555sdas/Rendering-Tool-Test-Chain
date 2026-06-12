@@ -1,10 +1,13 @@
 import json
 import os
+import signal
 import subprocess
+import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
@@ -17,6 +20,7 @@ from app.models.scene_asset import AssetType, SceneAsset
 from app.models.test_session import TestSession, TestSessionStatus
 from app.models.test_task import TestTask, TestTaskStatus
 from app.services.system_settings_service import SystemSettingsService
+from app.services.test_scope_service import TestScopeService
 from app.utils.datetime import to_utc_naive
 
 
@@ -24,6 +28,11 @@ settings = get_settings()
 
 
 class UnityRunnerService:
+    UNITY_PROCESS_POLL_SECONDS = 1.0
+    UNITY_COMPLETED_EXIT_GRACE_SECONDS = 20.0
+    UNITY_TERMINATE_GRACE_SECONDS = 8.0
+    UNITY_FORCE_KILL_WAIT_SECONDS = 5.0
+
     PLUGIN_LOG_MARKERS = (
         "XRBatchTestRunner",
         "XRTestManager",
@@ -53,6 +62,10 @@ class UnityRunnerService:
         "String conversion error: Illegal byte sequence": "Unity 读取启动环境变量失败。",
     }
 
+    UNITY_LOG_NOISE_MARKERS = (
+        "[Licensing::Client]",
+    )
+
     def __init__(self, db: Session):
         self.db = db
         self.backend_root = Path(__file__).resolve().parents[2]
@@ -72,12 +85,59 @@ class UnityRunnerService:
             ]
         return [self._public_scene(item) for item in scenes]
 
+    def get_test_metrics_catalog(self) -> dict[str, Any]:
+        return TestScopeService.get_catalog()
+
+    def get_default_test_scope_for_run(self) -> dict[str, Any]:
+        return SystemSettingsService().get_default_test_scope()["default_scope"]
+
+    def resolve_scope_bundle(
+        self,
+        *,
+        test_scope: dict[str, Any] | None,
+        metric_checks: dict[str, bool],
+        quality_checks: dict[str, bool],
+        quality_metric_checks: dict[str, bool],
+    ) -> dict[str, Any]:
+        if test_scope:
+            scope = TestScopeService.normalize_scope(test_scope, source="single_run_override")
+        else:
+            legacy = {
+                "metric_checks": metric_checks,
+                "quality_checks": quality_checks,
+                "quality_metric_checks": quality_metric_checks,
+            }
+            has_legacy_override = (
+                any(not value for value in metric_checks.values())
+                or any(not value for value in quality_checks.values())
+                or bool(quality_metric_checks)
+            )
+            if has_legacy_override:
+                scope = TestScopeService.normalize_scope(None, legacy_fields=legacy, source="single_run_override")
+            else:
+                scope = TestScopeService.normalize_scope(
+                    self.get_default_test_scope_for_run(),
+                    source="global_default",
+                )
+        TestScopeService.validate_scope(scope)
+        legacy_fields = TestScopeService.to_legacy_fields(scope)
+        execution_plan = TestScopeService.resolve_execution_plan(scope)
+        return {
+            "test_scope": scope,
+            "metric_checks": legacy_fields["metric_checks"],
+            "quality_checks": legacy_fields["quality_checks"],
+            "quality_metric_checks": legacy_fields["quality_metric_checks"],
+            "execution_plan": execution_plan,
+            "test_scope_summary": TestScopeService.build_scope_summary(scope),
+        }
+
     def start_test(
         self,
         *,
         project_id: int,
         unity_engine_id: str,
         scene_resource_id: str,
+        test_scope: dict[str, Any] | None = None,
         quality_checks: dict[str, bool],
         quality_metric_checks: dict[str, bool],
         metric_checks: dict[str, bool],
@@ -104,17 +164,29 @@ class UnityRunnerService:
         run_index = self._next_session_index(project_id)
         session_name = f"#{run_index}"
 
-        config = self._build_session_config(
-            project=project,
-            engine=engine,
-            scene=scene,
+        scope_bundle = self.resolve_scope_bundle(
+            test_scope=test_scope,
+            metric_checks=metric_checks,
             quality_checks=quality_checks,
             quality_metric_checks=quality_metric_checks,
-            metric_checks=metric_checks,
-            collect_interval=collect_interval,
-            frame_rate_duration_seconds=frame_rate_duration_seconds,
-            metrics_duration_seconds=metrics_duration_seconds,
-            run_index=run_index,
+        )
+        metric_checks = scope_bundle["metric_checks"]
+        quality_checks = scope_bundle["quality_checks"]
+        quality_metric_checks = scope_bundle["quality_metric_checks"]
+
+        from app.services.system_settings_service import SystemSettingsService
+
+        config = SystemSettingsService().attach_scoring_definition_snapshot(
+            self._build_session_config(
+                project=project,
+                engine=engine,
+                scene=scene,
+                scope_bundle=scope_bundle,
+                collect_interval=collect_interval,
+                frame_rate_duration_seconds=frame_rate_duration_seconds,
+                metrics_duration_seconds=metrics_duration_seconds,
+                run_index=run_index,
+            )
         )
 
         session = TestSession(
@@ -150,9 +222,7 @@ class UnityRunnerService:
             session=session,
             engine=engine,
             scene=scene,
-            quality_checks=quality_checks,
-            quality_metric_checks=quality_metric_checks,
-            metric_checks=metric_checks,
+            scope_bundle=scope_bundle,
             collect_interval=collect_interval,
             frame_rate_duration_seconds=frame_rate_duration_seconds,
             metrics_duration_seconds=metrics_duration_seconds,
@@ -176,13 +246,13 @@ class UnityRunnerService:
         self._append_runner_log(
             runner_log_path,
             "INFO",
-            "采集配置：间隔 %.2fs，帧率阶段 %.1fs，指标阶段 %.1fs，性能项=%s，质量项=%s"
+            "采集配置：间隔 %.2fs，帧率阶段 %.1fs，指标阶段 %.1fs，测试范围=%s，跳过=%s"
             % (
                 collect_interval,
                 frame_rate_duration_seconds,
                 metrics_duration_seconds,
-                self._enabled_names(metric_checks, self._metric_check_labels()),
-                self._enabled_names(quality_checks, self._quality_check_labels()),
+                "、".join(scope_bundle["test_scope_summary"]["selected_labels"][:8]),
+                scope_bundle["test_scope_summary"]["skipped_count"],
             ),
         )
 
@@ -192,6 +262,7 @@ class UnityRunnerService:
                 scene=scene,
                 task_config_path=task_config_path,
                 log_path=unity_log_path,
+                runner_log_path=runner_log_path,
                 batchmode=batchmode,
             )
         except Exception as exc:
@@ -329,15 +400,26 @@ class UnityRunnerService:
         else:
             lines.append("Runner 日志尚未生成。")
 
+        launch_mode = config.get("launch_mode") or "new_editor"
         unity_filtered = self._filter_unity_log_lines(unity_raw, unity_limit)
+        unity_section_title = "──────── Unity 插件 / 关键事件 ────────"
         if unity_filtered:
-            lines.append("──────── Unity 插件 / 关键事件 ────────")
+            lines.append(unity_section_title)
             lines.extend(unity_filtered)
         elif unity_raw:
             lines.append("──────── Unity 原始日志（末尾） ────────")
             lines.extend(unity_raw[-min(30, unity_limit):])
         else:
-            lines.append("Unity 日志尚未生成，等待编辑器启动。")
+            editor_scoped = self._read_editor_log_for_task(
+                task_id=task.id,
+                session_id=session.id if session else None,
+            )
+            editor_filtered = self._filter_unity_log_lines(editor_scoped, unity_limit)
+            if editor_filtered:
+                lines.append("──────── Unity 插件 / 关键事件（Editor.log）────────")
+                lines.extend(editor_filtered)
+            else:
+                lines.extend(self._missing_unity_log_lines(launch_mode))
 
         if len(lines) > tail_lines:
             lines = lines[-tail_lines:]
@@ -614,9 +696,7 @@ class UnityRunnerService:
         project: Project,
         engine: dict[str, Any],
         scene: dict[str, Any],
-        quality_checks: dict[str, bool],
-        quality_metric_checks: dict[str, bool],
-        metric_checks: dict[str, bool],
+        scope_bundle: dict[str, Any],
         collect_interval: float,
         frame_rate_duration_seconds: float,
         metrics_duration_seconds: float,
@@ -638,9 +718,12 @@ class UnityRunnerService:
             "unity_scene_path": scene.get("scene_path"),
             "collector_package_name": scene.get("collector_package_name"),
             "collector_package_path": scene.get("collector_package_path"),
-            "quality_checks": quality_checks,
-            "quality_metric_checks": quality_metric_checks,
-            "metric_checks": metric_checks,
+            "test_scope": scope_bundle["test_scope"],
+            "execution_plan": scope_bundle["execution_plan"],
+            "test_scope_summary": scope_bundle["test_scope_summary"],
+            "quality_checks": scope_bundle["quality_checks"],
+            "quality_metric_checks": scope_bundle["quality_metric_checks"],
+            "metric_checks": scope_bundle["metric_checks"],
             "collect_interval": collect_interval,
             "frame_rate_duration_seconds": frame_rate_duration_seconds,
             "metrics_duration_seconds": metrics_duration_seconds,
@@ -653,9 +736,7 @@ class UnityRunnerService:
         session: TestSession,
         engine: dict[str, Any],
         scene: dict[str, Any],
-        quality_checks: dict[str, bool],
-        quality_metric_checks: dict[str, bool],
-        metric_checks: dict[str, bool],
+        scope_bundle: dict[str, Any],
         collect_interval: float,
         frame_rate_duration_seconds: float,
         metrics_duration_seconds: float,
@@ -670,6 +751,10 @@ class UnityRunnerService:
         upload_url = f"{settings.UNITY_RUNNER_PLATFORM_BASE_URL.rstrip('/')}/data-collection/test-sessions/{session.id}/samples/batch"
         progress_url = f"{settings.UNITY_RUNNER_PLATFORM_BASE_URL.rstrip('/')}/unity-runner/progress/{task.id}"
 
+        metric_checks = scope_bundle["metric_checks"]
+        quality_checks = scope_bundle["quality_checks"]
+        quality_metric_checks = scope_bundle["quality_metric_checks"]
+        collector_flags = scope_bundle["execution_plan"]["collector_flags"]
         payload = {
             "taskId": task.id,
             "platformSessionId": session.id,
@@ -687,12 +772,17 @@ class UnityRunnerService:
             "collectInterval": collect_interval,
             "frameRateDurationSeconds": frame_rate_duration_seconds,
             "metricsDurationSeconds": metrics_duration_seconds,
-            "collectFrameRate": metric_checks.get("frame_rate", True),
-            "collectFrameTime": metric_checks.get("frame_time", True),
-            "collectCpuUsage": metric_checks.get("cpu", True),
-            "collectGpuUsage": metric_checks.get("gpu", True),
-            "collectMemory": metric_checks.get("memory", True),
-            "collectDeviceInfo": metric_checks.get("device_info", True),
+            "testScopeVersion": scope_bundle["test_scope"].get("schema_version", 1),
+            "requestedMetricIds": scope_bundle["test_scope_summary"]["selected_ids"],
+            "supportMetricIds": scope_bundle["execution_plan"].get("support_metric_ids", []),
+            "collectFrameRate": collector_flags.get("frame_rate", False),
+            "collectFrameTime": collector_flags.get("frame_time", False),
+            "collectCpuUsage": collector_flags.get("cpu", False),
+            "collectGpuUsage": collector_flags.get("gpu", False),
+            "collectMemory": collector_flags.get("memory", False),
+            "collectDeviceInfo": collector_flags.get("device_info", False),
+            "collectRenderingStats": collector_flags.get("rendering_stats", False),
+            "collectRenderQuality": collector_flags.get("render_quality", False),
             "enableNetworkUpload": True,
             "autoCreateSession": False,
             "autoStart": True,
@@ -720,9 +810,11 @@ class UnityRunnerService:
         task_config_path: Path,
         log_path: Path,
         batchmode: bool,
+        runner_log_path: Path | None = None,
     ) -> subprocess.Popen | None:
         project_path = Path(scene["project_path"])
         if self._is_project_open(project_path):
+            self._ensure_existing_editor_plugin_current(scene, runner_log_path)
             self._dispatch_to_existing_editor(project_path, task_config_path)
             return None
 
@@ -746,6 +838,70 @@ class UnityRunnerService:
             env=self._unity_process_environment(),
             start_new_session=os.name != "nt",
         )
+
+    def _ensure_existing_editor_plugin_current(
+        self,
+        scene: dict[str, Any],
+        runner_log_path: Path | None,
+        timeout_seconds: float = 60.0,
+    ) -> None:
+        package_value = scene.get("collector_package_path")
+        if not package_value:
+            return
+
+        package_path = Path(package_value)
+        project_path = Path(scene["project_path"])
+        source_mtime = self._latest_plugin_source_mtime(package_path)
+        if source_mtime is None:
+            return
+
+        script_assemblies = project_path / "Library" / "ScriptAssemblies"
+        runtime_assembly = script_assemblies / "XRDataCollector.Runtime.dll"
+        editor_assembly = script_assemblies / "XRDataCollector.Editor.dll"
+        assembly_mtime = min(
+            runtime_assembly.stat().st_mtime if runtime_assembly.exists() else 0.0,
+            editor_assembly.stat().st_mtime if editor_assembly.exists() else 0.0,
+        )
+        if assembly_mtime >= source_mtime:
+            return
+
+        marker_path = project_path / "Assets" / "XRDataCollectorGenerated" / "Editor" / "PackageRefreshMarker.cs"
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_content = (
+            "// Auto-generated by XR Test Platform to refresh the local collector package.\n"
+            "namespace XRDataCollectorGenerated\n"
+            "{\n"
+            f'    internal static class PackageRefreshMarker {{ internal const string SourceTimestamp = "{source_mtime:.6f}"; }}\n'
+            "}\n"
+        )
+        marker_path.write_text(marker_content, encoding="utf-8")
+        refresh_started_at = marker_path.stat().st_mtime
+        self._append_runner_log(runner_log_path, "INFO", "检测到 Unity 插件程序集落后于源码，等待 Editor 刷新并重新编译。")
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            runtime_mtime = runtime_assembly.stat().st_mtime if runtime_assembly.exists() else 0.0
+            editor_mtime = editor_assembly.stat().st_mtime if editor_assembly.exists() else 0.0
+            if runtime_mtime >= refresh_started_at and editor_mtime >= refresh_started_at:
+                self._append_runner_log(runner_log_path, "INFO", "Unity 插件已刷新并重新编译，开始投递测试任务。")
+                return
+            time.sleep(0.5)
+
+        raise RuntimeError(
+            "Unity 插件源码已更新，但当前打开的 Editor 未在 60 秒内完成重新编译。"
+            "请检查 Unity Console 编译错误，或关闭 Unity 后重新启动测试。"
+        )
+
+    @staticmethod
+    def _latest_plugin_source_mtime(package_path: Path) -> float | None:
+        if not package_path.is_dir():
+            return None
+        mtimes = [
+            path.stat().st_mtime
+            for path in package_path.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".cs", ".asmdef", ".json"}
+        ]
+        return max(mtimes) if mtimes else None
 
     def _is_project_open(self, project_path: Path) -> bool:
         lock_path = project_path / "Temp" / "UnityLockfile"
@@ -916,7 +1072,22 @@ class UnityRunnerService:
         runner_log_path: Path,
     ) -> None:
         def monitor() -> None:
-            return_code = process.wait()
+            def session_completed() -> bool:
+                status_db = SessionLocal()
+                try:
+                    session = status_db.query(TestSession).filter(TestSession.id == session_id).first()
+                    return (
+                        session is not None
+                        and self._session_status_value(session.status) == TestSessionStatus.COMPLETED.value
+                    )
+                finally:
+                    status_db.close()
+
+            return_code = self._wait_for_unity_process_exit(
+                process=process,
+                session_completed=session_completed,
+                runner_log_path=runner_log_path,
+            )
             db = SessionLocal()
             try:
                 task = db.query(TestTask).filter(TestTask.id == task_id).first()
@@ -972,11 +1143,70 @@ class UnityRunnerService:
         )
         thread.start()
 
-    def _terminate_process(self, pid: int, runner_log_path: Path | None) -> None:
+    def _wait_for_unity_process_exit(
+        self,
+        *,
+        process: subprocess.Popen,
+        session_completed: Callable[[], bool],
+        runner_log_path: Path | None,
+    ) -> int:
+        completed_seen_at: float | None = None
+
+        while True:
+            try:
+                return process.wait(timeout=self.UNITY_PROCESS_POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+
+            if not session_completed():
+                completed_seen_at = None
+                continue
+
+            if completed_seen_at is None:
+                completed_seen_at = time.monotonic()
+                self._append_runner_log(
+                    runner_log_path,
+                    "INFO",
+                    "测试结果已完成上传，等待 Unity Editor 正常退出。",
+                )
+                continue
+
+            if time.monotonic() - completed_seen_at < self.UNITY_COMPLETED_EXIT_GRACE_SECONDS:
+                continue
+
+            self._append_runner_log(
+                runner_log_path,
+                "WARN",
+                "Unity Editor 在结果上传完成后仍未退出，疑似卡在原生关闭流程，开始回收冷启动进程。",
+            )
+            self._terminate_process(process.pid, runner_log_path)
+            try:
+                return process.wait(timeout=self.UNITY_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                self._append_runner_log(
+                    runner_log_path,
+                    "WARN",
+                    "Unity Editor 未响应终止信号，开始强制回收冷启动进程。",
+                )
+                self._terminate_process(process.pid, runner_log_path, force=True)
+                try:
+                    return process.wait(timeout=self.UNITY_FORCE_KILL_WAIT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    self._append_runner_log(
+                        runner_log_path,
+                        "ERROR",
+                        "Unity 冷启动进程强制回收后仍未结束，停止等待并保留系统级诊断信息。",
+                    )
+                    return -int(getattr(signal, "SIGKILL", 9))
+
+    def _terminate_process(self, pid: int, runner_log_path: Path | None, *, force: bool = False) -> bool:
         try:
             if os.name == "nt":
+                command = ["taskkill", "/PID", str(pid), "/T"]
+                if force:
+                    command.append("/F")
                 result = subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    command,
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -986,11 +1216,98 @@ class UnityRunnerService:
                 else:
                     detail = (result.stderr or result.stdout or "").strip()
                     self._append_runner_log(runner_log_path, "WARN", f"终止进程返回非零状态：pid={pid}，{detail}")
+                    return False
             else:
-                os.kill(pid, 15)
-                self._append_runner_log(runner_log_path, "INFO", f"Unity 进程已发送终止信号：pid={pid}")
+                signal_value = signal.SIGKILL if force else signal.SIGTERM
+                process_group_id = os.getpgid(pid)
+                if process_group_id != os.getpgrp():
+                    os.killpg(process_group_id, signal_value)
+                else:
+                    os.kill(pid, signal_value)
+                signal_name = "SIGKILL" if force else "SIGTERM"
+                self._append_runner_log(
+                    runner_log_path,
+                    "INFO",
+                    f"Unity 冷启动进程组已发送 {signal_name}：pid={pid}",
+                )
+            return True
         except Exception as exc:
             self._append_runner_log(runner_log_path, "WARN", f"终止 Unity 进程失败：pid={pid}，{exc}")
+            return False
+
+    def _default_unity_editor_log_path(self) -> Path | None:
+        if os.name == "nt":
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                return None
+            return Path(local_app_data) / "Unity" / "Editor" / "Editor.log"
+        if sys.platform == "darwin":
+            return Path.home() / "Library" / "Logs" / "Unity" / "Editor.log"
+        return Path.home() / ".config" / "unity3d" / "Editor.log"
+
+    def _read_log_tail(self, path: Path, max_lines: int = 4000) -> list[str]:
+        if not path.exists():
+            return []
+        try:
+            with path.open("rb") as file:
+                file.seek(0, os.SEEK_END)
+                size = file.tell()
+                if size <= 0:
+                    return []
+                chunk_size = min(size, 768 * 1024)
+                file.seek(-chunk_size, os.SEEK_END)
+                data = file.read().decode("utf-8", errors="replace")
+            return data.splitlines()[-max_lines:]
+        except Exception:
+            return self._read_log_lines(path)[-max_lines:]
+
+    def _scope_editor_log_to_task(
+        self,
+        lines: list[str],
+        *,
+        task_id: int,
+        session_id: int | None,
+    ) -> list[str]:
+        anchors = [
+            f"任务 {task_id}",
+            f"task {task_id}",
+            f"taskId={task_id}",
+            f'"taskId": {task_id}',
+            f'"taskId":{task_id}',
+        ]
+        if session_id is not None:
+            anchors.extend(
+                [
+                    f"平台会话 {session_id}",
+                    f"platformSessionId={session_id}",
+                    f'"platformSessionId": {session_id}',
+                    f'"platformSessionId":{session_id}',
+                ]
+            )
+
+        anchor_idx = -1
+        for idx, line in enumerate(lines):
+            if any(marker in line for marker in anchors):
+                anchor_idx = idx
+        if anchor_idx < 0:
+            return []
+        return lines[anchor_idx:]
+
+    def _read_editor_log_for_task(self, *, task_id: int, session_id: int | None) -> list[str]:
+        editor_log_path = self._default_unity_editor_log_path()
+        if not editor_log_path:
+            return []
+        tail_lines = self._read_log_tail(editor_log_path)
+        return self._scope_editor_log_to_task(tail_lines, task_id=task_id, session_id=session_id)
+
+    def _missing_unity_log_lines(self, launch_mode: str) -> list[str]:
+        if launch_mode == "existing_editor":
+            return [
+                "──────── Unity 插件（热启动）────────",
+                "任务在已打开的 Unity Editor 中执行；插件日志写入本机 Editor.log / Unity Console。",
+                "采集进度与指标请以上方 Runner 日志为准。",
+            ]
+        return ["Unity 日志尚未生成，等待编辑器启动。"]
 
     def _read_log_lines(self, path: Path | None) -> list[str]:
         if not path or not path.exists():
@@ -1016,7 +1333,12 @@ class UnityRunnerService:
 
         merged = priority + warnings[-30:]
         if len(merged) < 12:
-            merged.extend(lines[-min(40, limit):])
+            fallback_lines = [
+                line
+                for line in lines
+                if not any(marker in line for marker in self.UNITY_LOG_NOISE_MARKERS)
+            ]
+            merged.extend(fallback_lines[-min(40, limit):])
 
         deduped: list[str] = []
         seen: set[str] = set()

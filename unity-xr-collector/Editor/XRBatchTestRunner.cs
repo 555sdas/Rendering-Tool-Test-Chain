@@ -518,6 +518,8 @@ namespace XRDataCollector.Editor
             config.collectGpuUsage = task.collectGpuUsage;
             config.collectMemory = task.collectMemory;
             config.collectDeviceInfo = task.collectDeviceInfo;
+            config.collectRenderingStats = task.collectRenderingStats;
+            config.collectRenderQuality = task.collectRenderQuality;
             config.platformBaseUrl = task.platformBaseUrl;
             config.uploadUrl = task.uploadUrl;
             config.progressUrl = task.progressUrl;
@@ -567,12 +569,21 @@ namespace XRDataCollector.Editor
             }
 
             EditorUtility.SetDirty(manager);
+            var requestedSummary = task.requestedMetricIds != null && task.requestedMetricIds.Length > 0
+                ? string.Join("、", task.requestedMetricIds)
+                : "（未提供 requestedMetricIds，沿用布尔开关）";
+            var supportSummary = task.supportMetricIds != null && task.supportMetricIds.Length > 0
+                ? string.Join("、", task.supportMetricIds)
+                : "无";
             Debug.Log(
                 "[XRBatchTestRunner] 已应用采集配置：" +
                 $"间隔={config.collectInterval:F2}s, 帧率阶段={config.frameRateDurationSeconds:F1}s, 指标阶段={config.metricsDurationSeconds:F1}s, " +
                 $"性能项 FPS={config.collectFrameRate}, 帧时间={config.collectFrameTime}, CPU={config.collectCpuUsage}, GPU={config.collectGpuUsage}, 内存={config.collectMemory}, 设备={config.collectDeviceInfo}, " +
+                $"渲染统计={config.collectRenderingStats}, 渲染质量={config.collectRenderQuality}, " +
                 $"质量项 光照={config.testLightingQuality}, 材质={config.testMaterialQuality}, 后处理={config.testPostProcessingQuality}, 物理={config.testPhysicsQuality}"
             );
+            Debug.Log($"[XRBatchTestRunner] 用户选择：{requestedSummary}");
+            Debug.Log($"[XRBatchTestRunner] 内部支撑采集：{supportSummary}");
         }
 
         private static string GetArgumentValue(string name)
@@ -610,6 +621,11 @@ namespace XRDataCollector.Editor
             public bool collectGpuUsage = true;
             public bool collectMemory = true;
             public bool collectDeviceInfo = true;
+            public bool collectRenderingStats = true;
+            public bool collectRenderQuality = true;
+            public int testScopeVersion = 1;
+            public string[] requestedMetricIds;
+            public string[] supportMetricIds;
             public bool enableNetworkUpload;
             public bool autoCreateSession;
             public bool autoStart;

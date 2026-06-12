@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.services.scoring_definition_service import ScoringDefinitionService
+from app.services.test_scope_service import TestScopeService
 
 
 settings = get_settings()
@@ -30,6 +32,75 @@ class SystemSettingsService:
             "settings_file": str(self.settings_path),
         }
 
+    def get_test_metrics_catalog(self) -> dict[str, Any]:
+        return TestScopeService.get_catalog()
+
+    def get_default_test_scope(self) -> dict[str, Any]:
+        data = self._load()
+        test_metrics = data.get("test_metrics") if isinstance(data.get("test_metrics"), dict) else {}
+        raw_scope = test_metrics.get("default_scope") if isinstance(test_metrics.get("default_scope"), dict) else None
+        scope = TestScopeService.normalize_scope(raw_scope, source="global_default")
+        return {
+            "default_scope": scope,
+            "scope_summary": TestScopeService.build_scope_summary(scope),
+            "settings_file": str(self.settings_path),
+        }
+
+    def update_default_test_scope(self, raw_scope: dict[str, Any]) -> dict[str, Any]:
+        scope = TestScopeService.normalize_scope(raw_scope, source="global_default")
+        TestScopeService.validate_scope(scope)
+        data = self._load()
+        data["test_metrics"] = {"default_scope": scope}
+        self._save(data)
+        return self.get_default_test_scope()
+
+    def reset_default_test_scope(self) -> dict[str, Any]:
+        data = self._load()
+        data["test_metrics"] = {
+            "default_scope": TestScopeService.get_builtin_default_scope(source="built_in_default"),
+        }
+        self._save(data)
+        return self.get_default_test_scope()
+
+    def get_scoring_definition(self) -> dict[str, Any]:
+        data = self._load()
+        raw = data.get("scoring_definition") if isinstance(data.get("scoring_definition"), dict) else None
+        if raw:
+            try:
+                definition = ScoringDefinitionService.validate_definition(raw)
+            except Exception:
+                definition = ScoringDefinitionService.get_builtin_definition()
+        else:
+            definition = ScoringDefinitionService.get_builtin_definition()
+        return {
+            "definition": definition,
+            "catalog": ScoringDefinitionService.get_catalog(),
+            "summary": ScoringDefinitionService.build_response_summary(definition),
+            "settings_file": str(self.settings_path),
+        }
+
+    def update_scoring_definition(self, raw_definition: dict[str, Any]) -> dict[str, Any]:
+        definition = ScoringDefinitionService.validate_definition(raw_definition)
+        data = self._load()
+        data["scoring_definition"] = definition
+        self._save(data)
+        return self.get_scoring_definition()
+
+    def reset_scoring_definition(self) -> dict[str, Any]:
+        data = self._load()
+        data["scoring_definition"] = ScoringDefinitionService.get_builtin_definition()
+        self._save(data)
+        return self.get_scoring_definition()
+
+    def get_global_scoring_definition_snapshot(self) -> dict[str, Any]:
+        return self.get_scoring_definition()["definition"]
+
+    def attach_scoring_definition_snapshot(self, config: dict[str, Any] | None) -> dict[str, Any]:
+        merged = dict(config or {})
+        if "scoring_definition" not in merged:
+            merged["scoring_definition"] = self.get_global_scoring_definition_snapshot()
+        return merged
+
     def update_unity_settings(self, values: dict[str, str]) -> dict[str, Any]:
         data = self._load()
         data["unity"] = {
@@ -38,11 +109,14 @@ class SystemSettingsService:
             "unity_scene_path": values.get("unity_scene_path", "").strip(),
             "collector_package_path": values.get("collector_package_path", "").strip(),
         }
+        self._save(data)
+        return self.get_unity_settings()
+
+    def _save(self, data: dict[str, Any]) -> None:
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
         with self.settings_path.open("w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
             file.write("\n")
-        return self.get_unity_settings()
 
     def get_unity_resources(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         config = self.get_unity_settings()

@@ -24,7 +24,8 @@ export const authApi = {
   refreshToken: async (): Promise<LoginResponse> => {
     const refreshToken = localStorage.getItem('xr_refresh_token');
     const response = await apiClient.post<LoginResponse>(
-      `/auth/refresh?refresh_token=${encodeURIComponent(refreshToken || '')}`
+      '/auth/refresh',
+      { refresh_token: refreshToken || '' },
     );
     return response.data;
   },

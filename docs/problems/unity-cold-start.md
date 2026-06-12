@@ -1,8 +1,47 @@
 # Unity 冷启动已知问题（Problem Document）
 
 > 文档用途：记录网页一键冷启动 Unity 时仍未解决的问题，供排查、协作与外部求助使用。  
-> 最后更新：2026-06-11  
+> 最后更新：2026-06-12
 > 状态：**修复已实现，待真实冷启动复核**
+
+## 2026-06-12 测试完成后 Unity 偶发未响应
+
+### 根因定位
+
+历史冷启动任务 `231` 已确认：
+
+```text
+08:17:52  测试结果上传成功
+08:17:52  XRBatchTestRunner 已安排 Editor 退出
+08:17:58  XRBatchTestRunner 调用 EditorApplication.Exit(0)
+           Unity 进入原生关闭流程
+           日志停止在 Unity.ILPP.Runner.PostProcessingAssemblyLoadContext unloading
+08:20:07  Unity 进程最终以 SIGTERM（退出码 -15）结束
+```
+
+该任务的测试、采集和上传均已完成。卡点发生在 `EditorApplication.Exit()` 之后，Unity 托管代码和
+`EditorApplication.update` 已停止执行，因此插件无法在进程内继续自救。
+
+正常退出日志在 ILPP 卸载后还会出现 `Cleanup mono`、`Application.Shutdown.CleanupEngine` 等记录；
+未响应任务没有这些记录。当前证据表明这是 Unity 2022.3 Editor 原生关闭阶段的偶发阻塞，发生位置
+集中在 IL Post Processing 程序集卸载附近，而不是测试协程或结果上传仍在运行。
+
+### 已增加的防护
+
+后端冷启动进程监控增加退出看门狗：
+
+- 会话完成上传后，等待 Unity Editor 正常退出 20 秒。
+- 超时后向冷启动 Unity 进程组发送 `SIGTERM`，同时回收其子进程。
+- 再等待 8 秒仍未退出时发送 `SIGKILL`。
+- 强制回收后仍使用已上传完成的会话结果，不把测试误判为失败。
+- 该防护仅作用于后端创建的新 Editor 进程，不会终止用户提前打开的热启动 Editor。
+
+真实复核时检查 Runner 日志是否出现：
+
+```text
+测试结果已完成上传，等待 Unity Editor 正常退出。
+Unity Editor 在结果上传完成后仍未退出，疑似卡在原生关闭流程，开始回收冷启动进程。
+```
 
 ## 2026-06-11 修复结论
 

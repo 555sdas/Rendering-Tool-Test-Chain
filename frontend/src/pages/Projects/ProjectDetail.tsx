@@ -21,6 +21,17 @@ import {
   Tabs,
 } from 'antd';
 import SessionResultPanel from '@/components/SessionResultPanel';
+import MetricScopeSelector from '@/components/MetricScopeSelector';
+import TestScopeBanner from '@/components/TestScopeBanner';
+import {
+  buildBuiltinDefaultScope,
+  fillScopeKeys,
+  hasAnyEnabledLeaf,
+  inferScopeFromSessionConfig,
+  isMetricEnabled,
+  type MetricCatalog,
+  type TestScope,
+} from '@/lib/testScope';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -102,12 +113,20 @@ interface MetricTileProps {
   label: string;
   value: string | number;
   accent?: string;
+  skipped?: boolean;
+  pending?: boolean;
 }
 
-const MetricTile: React.FC<MetricTileProps> = ({ label, value, accent = '#111827' }) => (
+const MetricTile: React.FC<MetricTileProps> = ({ label, value, accent = '#111827', skipped = false, pending = false }) => (
   <div className="unity-metric-tile">
     <div className="unity-metric-label">{label}</div>
-    <div className="unity-metric-value" style={{ color: accent }}>{value}</div>
+    {skipped ? (
+      <Tag color="default">跳过</Tag>
+    ) : pending ? (
+      <div className="unity-metric-value" style={{ color: '#8c8c8c' }}>等待采集</div>
+    ) : (
+      <div className="unity-metric-value" style={{ color: accent }}>{value}</div>
+    )}
   </div>
 );
 
@@ -295,6 +314,9 @@ const ProjectDetail: React.FC = () => {
   const [showUnityConfig, setShowUnityConfig] = useState(true);
   const [resultSessionId, setResultSessionId] = useState<number | null>(null);
   const [form] = Form.useForm();
+  const [metricsCatalog, setMetricsCatalog] = useState<MetricCatalog | null>(null);
+  const [testScope, setTestScope] = useState<TestScope>(buildBuiltinDefaultScope('global_default'));
+  const [activeRunScope, setActiveRunScope] = useState<TestScope | null>(null);
 
   const loadSessions = useCallback(async () => {
     if (!projectId) return;
@@ -307,12 +329,18 @@ const ProjectDetail: React.FC = () => {
       if (!projectId) return;
       setLoading(true);
       try {
-        const [projectData, sessionsData, engineData, sceneData] = await Promise.all([
+        const [projectData, sessionsData, engineData, sceneData, catalog, defaultScope] = await Promise.all([
           projectsApi.get(Number(projectId)),
           projectsApi.listSessions(Number(projectId)),
           unityRunnerApi.listEngines(),
           unityRunnerApi.listScenes({ project_id: Number(projectId) }),
+          unityRunnerApi.getTestMetricsCatalog().catch(() => null),
+          unityRunnerApi.getDefaultTestScope().catch(() => null),
         ]);
+        setMetricsCatalog(catalog);
+        if (defaultScope?.default_scope) {
+          setTestScope(fillScopeKeys(defaultScope.default_scope, 'global_default'));
+        }
         setProject(projectData);
         setSessions(sessionsData.items || []);
         setEngines(engineData);
@@ -331,7 +359,6 @@ const ProjectDetail: React.FC = () => {
           metrics_duration_seconds: 30,
           batchmode: false,
           ensure_plugin: true,
-          quality_checks: ['lighting', 'materials', 'post_processing', 'physics'],
         });
       } catch {
         message.error('获取项目详情失败');
@@ -556,28 +583,33 @@ const ProjectDetail: React.FC = () => {
     metrics_duration_seconds: number;
     batchmode?: boolean;
     ensure_plugin?: boolean;
-    quality_checks?: string[];
   }) => {
     if (!projectId) return;
-    const checks = new Set(values.quality_checks || []);
+    if (!hasAnyEnabledLeaf(testScope)) {
+      message.error('请至少选择一个测试指标');
+      return;
+    }
     setLaunching(true);
     try {
       const result = await unityRunnerApi.startTest({
         project_id: Number(projectId),
         unity_engine_id: values.unity_engine_id,
         scene_resource_id: values.scene_resource_id,
+        test_scope: { ...testScope, source: 'single_run_override' },
         collect_interval: values.collect_interval,
         frame_rate_duration_seconds: values.frame_rate_duration_seconds,
         metrics_duration_seconds: values.metrics_duration_seconds,
         batchmode: Boolean(values.batchmode),
         ensure_plugin: values.ensure_plugin !== false,
         quality_checks: {
-          lighting: checks.has('lighting'),
-          materials: checks.has('materials'),
-          post_processing: checks.has('post_processing'),
-          physics: checks.has('physics'),
+          lighting: Boolean(testScope.quality_categories.lighting),
+          materials: Boolean(testScope.quality_categories.materials),
+          post_processing: Boolean(testScope.quality_categories.post_processing),
+          physics: Boolean(testScope.quality_categories.physics),
         },
       });
+      const sessionScope = inferScopeFromSessionConfig(result.session.config || {});
+      setActiveRunScope(sessionScope);
       setActiveRun(
         createActiveRunFromSession(result.session, {
           taskId: result.task.id,
@@ -607,9 +639,16 @@ const ProjectDetail: React.FC = () => {
     }
   };
 
-  const handleRestartUnityTest = () => {
+  const handleRestartUnityTest = async () => {
     setShowUnityConfig(true);
     setActiveRun(null);
+    setActiveRunScope(null);
+    try {
+      const defaultScope = await unityRunnerApi.getDefaultTestScope();
+      setTestScope(fillScopeKeys(defaultScope.default_scope, 'global_default'));
+    } catch {
+      setTestScope(buildBuiltinDefaultScope('global_default'));
+    }
     setRealtimeProgress(null);
     setTaskLogs([]);
     setTaskError(null);
@@ -637,6 +676,7 @@ const ProjectDetail: React.FC = () => {
 
   const activeEstimate = activeRun ? getRunProgressDisplay(activeRun, now, realtimeProgress) : null;
   const collectionStep = activeRun ? getCollectionStepState(activeRun, realtimeProgress) : null;
+  const monitorScope = activeRunScope;
   const showUnitySession = !showUnityConfig && Boolean(launching || activeRun);
 
   if (loading) {
@@ -803,6 +843,8 @@ const ProjectDetail: React.FC = () => {
               </Space>
             </div>
 
+            <TestScopeBanner scope={activeRunScope} summary={realtimeProgress?.test_scope_summary} />
+
             <div className="unity-monitor-body">
               <div className="unity-monitor-summary">
                 <div className="unity-progress-row">
@@ -818,11 +860,34 @@ const ProjectDetail: React.FC = () => {
                 </div>
 
                 <div className="unity-core-metrics">
-                  <MetricTile label="FPS" value={`${(realtimeProgress?.fps ?? 0).toFixed(1)} fps`} accent="#3b82f6" />
-                  <MetricTile label="CPU" value={`${(realtimeProgress?.cpu_usage_percent ?? 0).toFixed(1)} %`} accent="#f59e0b" />
-                  <MetricTile label="GPU" value={`${(realtimeProgress?.gpu_usage_percent ?? 0).toFixed(1)} %`} accent="#10b981" />
-                  <MetricTile label="内存" value={`${(realtimeProgress?.memory_mb ?? 0).toFixed(0)} MB`} />
-                  <MetricTile label="样本数" value={realtimeProgress?.sample_count ?? 0} />
+                  <MetricTile
+                    label="FPS"
+                    skipped={monitorScope ? !isMetricEnabled(monitorScope, 'frame_rate') : false}
+                    pending={Boolean(monitorScope && isMetricEnabled(monitorScope, 'frame_rate') && !realtimeProgress)}
+                    value={`${(realtimeProgress?.fps ?? 0).toFixed(1)} fps`}
+                    accent="#3b82f6"
+                  />
+                  <MetricTile
+                    label="CPU"
+                    skipped={monitorScope ? !isMetricEnabled(monitorScope, 'cpu') : false}
+                    pending={Boolean(monitorScope && isMetricEnabled(monitorScope, 'cpu') && !realtimeProgress)}
+                    value={`${(realtimeProgress?.cpu_usage_percent ?? 0).toFixed(1)} %`}
+                    accent="#f59e0b"
+                  />
+                  <MetricTile
+                    label="GPU"
+                    skipped={monitorScope ? !isMetricEnabled(monitorScope, 'gpu') : false}
+                    pending={Boolean(monitorScope && isMetricEnabled(monitorScope, 'gpu') && !realtimeProgress)}
+                    value={`${(realtimeProgress?.gpu_usage_percent ?? 0).toFixed(1)} %`}
+                    accent="#10b981"
+                  />
+                  <MetricTile
+                    label="内存"
+                    skipped={monitorScope ? !isMetricEnabled(monitorScope, 'memory') : false}
+                    pending={Boolean(monitorScope && isMetricEnabled(monitorScope, 'memory') && !realtimeProgress)}
+                    value={`${(realtimeProgress?.memory_mb ?? 0).toFixed(0)} MB`}
+                  />
+                  <MetricTile label="样本数" value={realtimeProgress?.sample_count ?? 0} pending={!realtimeProgress} />
                   <MetricTile label="阶段" value={activeEstimate.phase} />
                 </div>
 
@@ -1009,19 +1074,8 @@ const ProjectDetail: React.FC = () => {
                 </Form.Item>
               </Space>
 
-              <Form.Item
-                name="quality_checks"
-                label="渲染质量测试项"
-                rules={[{ required: true, message: '请至少选择一个测试项' }]}
-              >
-                <Checkbox.Group
-                  options={[
-                    { label: '光照与阴影', value: 'lighting' },
-                    { label: '材质与纹理', value: 'materials' },
-                    { label: '后处理', value: 'post_processing' },
-                    { label: '物理仿真', value: 'physics' },
-                  ]}
-                />
+              <Form.Item label="测试指标" required>
+                <MetricScopeSelector value={testScope} catalog={metricsCatalog} onChange={setTestScope} />
               </Form.Item>
 
               <Space size="large" wrap>

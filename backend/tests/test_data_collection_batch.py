@@ -72,6 +72,43 @@ def test_batch_upload_preserves_zero_metrics_and_maps_graphics_memory(client, db
     assert sample.cpu_usage_percent == 0
     assert sample.gpu_usage_percent == 0
     assert sample.draw_calls == 0
-    assert sample.texture_memory_mb == 128
+    assert sample.texture_memory_mb is None
+    assert sample.extra_metrics["graphics_memory_mb"] == 128
     assert sample.extra_metrics["device_info"]["deviceModel"] == "Cold Start Mac"
     assert sample.extra_metrics["render_quality"]["active_light_count"] == 0
+
+
+def test_batch_upload_stores_texture_memory_and_manifest(client, db, admin_auth_headers):
+    session = SessionModel(name="#manifest", status=SessionStatus.RUNNING.value, started_at=datetime.utcnow())
+    db.add(session)
+    db.commit()
+
+    manifest = [
+        {
+            "id": "materials.texture_memory",
+            "status": "available",
+            "reasonCode": None,
+            "measurementTier": "native",
+            "validSampleCount": 1,
+            "errorCount": 0,
+        }
+    ]
+    response = client.post(
+        f"/api/v1/data-collection/test-sessions/{session.id}/samples/batch",
+        headers=admin_auth_headers,
+        json={
+            "qualityMetricManifest": manifest,
+            "samples": [{
+                "timestamp": datetime.utcnow().isoformat(),
+                "textureMemoryMB": 256.5,
+                "renderTextureMemoryMB": 48.0,
+            }],
+        },
+    )
+
+    assert response.status_code == 200
+    sample = db.query(PerformanceSample).filter(PerformanceSample.test_session_id == session.id).one()
+    assert sample.texture_memory_mb == 256.5
+    assert sample.render_texture_memory_mb == 48.0
+    db.refresh(session)
+    assert session.config["quality_metric_manifest"] == manifest

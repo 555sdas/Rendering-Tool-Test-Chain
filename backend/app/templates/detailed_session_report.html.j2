@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #172033;
+      --muted: #5b6578;
+      --primary: #0f3a5f;
+      --accent: #1677ff;
+      --border: #d8dee9;
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef4ff 0%, var(--bg) 220px, var(--bg) 100%);
+      line-height: 1.55;
+    }
+    .page { max-width: 1080px; margin: 0 auto; padding: 32px 28px 48px; }
+    .hero {
+      background: linear-gradient(135deg, #0f3a5f 0%, #1677ff 100%);
+      color: #fff;
+      border-radius: 18px;
+      padding: 28px 32px;
+      box-shadow: 0 14px 40px rgba(15, 58, 95, 0.18);
+      margin-bottom: 24px;
+    }
+    .hero h1 { margin: 0 0 8px; font-size: 28px; font-weight: 700; }
+    .hero p { margin: 4px 0; opacity: 0.92; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.16);
+      font-size: 12px;
+      margin-right: 8px;
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 22px; }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+    }
+    .stat-card .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .stat-card .value { font-size: 24px; font-weight: 700; color: var(--primary); }
+    section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px 24px;
+      margin-bottom: 18px;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+    }
+    section h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      color: var(--primary);
+      border-left: 4px solid var(--accent);
+      padding-left: 10px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f8fafc; color: #334155; width: 28%; }
+    .data-table th { width: auto; background: #eef4ff; color: var(--primary); }
+    .status-available { color: var(--success); font-weight: 600; }
+    .status-missing, .status-unavailable { color: var(--warning); font-weight: 600; }
+    .status-failed { color: var(--danger); font-weight: 600; }
+    .status-skipped { color: #94a3b8; }
+    pre, .log-box {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-size: 11px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 520px;
+      overflow-y: auto;
+    }
+    .footnote { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+    @media print {
+      body { background: #fff; }
+      .page { padding: 0; }
+      section, .hero, .stat-card { break-inside: avoid; box-shadow: none; }
+      pre, .log-box { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="hero">
+      <h1>{{ title }}</h1>
+      <p>{{ description }}</p>
+      <p>
+        <span class="badge">会话 #{{ session.id }}</span>
+        <span class="badge">{{ session.name }}</span>
+        <span class="badge">生成于 {{ generated_at }}</span>
+      </p>
+    </div>
+
+    {% set fps = full_report.fps_analysis or {} %}
+    {% set frame = full_report.frame_time_analysis or {} %}
+    {% set memory = full_report.memory_analysis or {} %}
+    {% set stability = full_report.stability_summary or {} %}
+    {% set resource = full_report.resource_summary or {} %}
+    {% set quality = full_report.render_quality_assessment or {} %}
+    {% set violations = full_report.threshold_violations or [] %}
+
+    <div class="grid">
+      <div class="stat-card"><div class="label">平均 FPS</div><div class="value">{{ fps.mean | default('-', true) }}</div></div>
+      <div class="stat-card"><div class="label">P95 帧时间</div><div class="value">{{ frame.p95_ms | default('-', true) }}<span style="font-size:14px"> ms</span></div></div>
+      <div class="stat-card"><div class="label">渲染质量分</div><div class="value">{{ quality.overall_score | default('未测试', true) }}</div></div>
+      <div class="stat-card"><div class="label">风险等级</div><div class="value">{{ stability.risk_level | default('-', true) }}</div></div>
+    </div>
+
+    <section>
+      <h2>一、测试对象与会话信息</h2>
+      <table>
+        <tr><th>会话名称</th><td>{{ session.name }}</td></tr>
+        <tr><th>状态</th><td>{{ session_status }}</td></tr>
+        <tr><th>设备型号</th><td>{{ session.device_model or '-' }}</td></tr>
+        <tr><th>系统版本</th><td>{{ session.os_version or '-' }}</td></tr>
+        <tr><th>XR 运行时</th><td>{{ session.xr_runtime or '-' }}</td></tr>
+        <tr><th>应用版本</th><td>{{ session.app_version or '-' }}</td></tr>
+        <tr><th>运行时长</th><td>{{ session.duration_seconds or '-' }} 秒</td></tr>
+        <tr><th>样本数量</th><td>{{ sample_stats.count }}</td></tr>
+        <tr><th>首条样本时间</th><td>{{ sample_stats.first_timestamp or '-' }}</td></tr>
+        <tr><th>末条样本时间</th><td>{{ sample_stats.last_timestamp or '-' }}</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>二、测试范围摘要</h2>
+      {% set scope_summary = full_report.test_scope_summary or {} %}
+      <p><strong>已纳入 {{ scope_summary.selected_count or 0 }} 项</strong>，跳过 {{ scope_summary.skipped_count or 0 }} 项。</p>
+      <div class="two-col">
+        <div>
+          <p><strong>已选指标</strong></p>
+          <ul>{% for label in scope_summary.selected_labels or [] %}<li>{{ label }}</li>{% else %}<li>无</li>{% endfor %}</ul>
+        </div>
+        <div>
+          <p><strong>跳过指标</strong></p>
+          <ul>{% for label in scope_summary.skipped_labels or [] %}<li>{{ label }}</li>{% else %}<li>无</li>{% endfor %}</ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>三、核心性能指标</h2>
+      <table>
+        <tr><th>平均 FPS</th><td>{{ fps.mean | default('-', true) }}</td><th>中位 FPS</th><td>{{ fps.median | default('-', true) }}</td></tr>
+        <tr><th>最低 FPS</th><td>{{ fps.min | default('-', true) }}</td><th>最高 FPS</th><td>{{ fps.max | default('-', true) }}</td></tr>
+        <tr><th>P95 帧时间</th><td>{{ frame.p95_ms | default('-', true) }} ms</td><th>P99 帧时间</th><td>{{ frame.p99_ms | default('-', true) }} ms</td></tr>
+        <tr><th>长帧次数</th><td>{{ stability.long_frame_count | default('-', true) }}</td><th>掉帧率</th><td>{% if stability.dropped_frame_rate is not none %}{{ (stability.dropped_frame_rate * 100) | round(2) }}%{% else %}-{% endif %}</td></tr>
+        <tr><th>平均内存</th><td>{{ memory.mean_mb | default('-', true) }} MB</td><th>峰值内存</th><td>{{ memory.max_mb | default('-', true) }} MB</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>四、资源复杂度</h2>
+      <table>
+        <tr><th>平均 Draw Call</th><td>{{ resource.avg_draw_calls | default('-', true) }}</td></tr>
+        <tr><th>平均 SetPass</th><td>{{ resource.avg_set_pass_calls | default('-', true) }}</td></tr>
+        <tr><th>平均三角面数</th><td>{{ resource.avg_triangle_count | default('-', true) }}</td></tr>
+        <tr><th>峰值纹理内存</th><td>{{ resource.peak_texture_memory_mb | default('-', true) }} MB</td></tr>
+        <tr><th>峰值渲染纹理内存</th><td>{{ resource.peak_render_texture_memory_mb | default('-', true) }} MB</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>五、渲染质量评分</h2>
+      <table>
+        <tr><th>总体质量分</th><td>{{ quality.overall_score | default('未测试', true) }}</td></tr>
+        <tr><th>等级</th><td>{{ quality.grade | default('-', true) }}</td></tr>
+        <tr><th>数据完整度</th><td>{% if quality.data_completeness is not none %}{{ (quality.data_completeness * 100) | round(1) }}%{% else %}-{% endif %}</td></tr>
+        <tr><th>置信等级</th><td>{{ quality.confidence_grade | default('-', true) }}</td></tr>
+        <tr><th>评分定义来源</th><td>{{ scoring_source_labels.get(quality.scoring_definition_source, quality.scoring_definition_source or '-') }}</td></tr>
+      </table>
+      {% if quality.score_formula %}
+      <p class="footnote">参与总分权重合计 {{ quality.score_formula.effective_total_weight }}%，{% if quality.score_formula.normalized %}已按有效权重归一化{% else %}未归一化{% endif %}。</p>
+      {% endif %}
+      <table class="data-table" style="margin-top:12px">
+        <tr><th>维度</th><th>权重</th><th>得分</th><th>状态</th><th>扣分依据</th></tr>
+        {% for c in quality.categories or [] %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td>{{ c.weight }}%{% if c.included_in_overall_score == false %}（不计入总分）{% endif %}</td>
+          <td>{% if c.tested is sameas false or c.score is none %}未测试{% else %}{{ c.score }}{% endif %}</td>
+          <td>{{ c.status }}</td>
+          <td>{% if c.deductions %}{% for d in c.deductions %}{{ d.reason }} (-{{ d.points }}){% if not loop.last %}; {% endif %}{% endfor %}{% else %}无明显扣分{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">未生成渲染质量评分</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+
+    <section>
+      <h2>六、质量子项明细（21 项）</h2>
+      <table class="data-table">
+        <tr><th>子项</th><th>分类</th><th>状态</th><th>数值</th><th>说明</th><th>有效样本</th></tr>
+        {% for row in quality_metric_rows %}
+        <tr>
+          <td>{{ row.label }}</td>
+          <td>{{ row.category }}</td>
+          <td class="status-{{ row.status }}">{{ row.status_label }}</td>
+          <td>{{ row.values }}</td>
+          <td>{{ row.reason_label or '-' }}</td>
+          <td>{{ row.valid_sample_count if row.valid_sample_count is not none else '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">无质量子项数据</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+
+    <section>
+      <h2>七、阈值违规</h2>
+      <table class="data-table">
+        <tr><th>规则</th><th>指标</th><th>阈值</th><th>实际值</th><th>级别</th></tr>
+        {% for v in violations %}
+        <tr>
+          <td>{{ v.rule_name }}</td>
+          <td>{{ v.metric_name }}</td>
+          <td>{{ v.operator }} {{ v.threshold_value }}</td>
+          <td>{{ v.actual_value }}</td>
+          <td>{{ v.severity }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">未发现阈值违规</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+
+    {% if device_info_pretty %}
+    <section>
+      <h2>八、设备信息（首条样本）</h2>
+      <pre>{{ device_info_pretty }}</pre>
+    </section>
+    {% endif %}
+
+    <section>
+      <h2>九、运行日志（Runner / Unity）</h2>
+      <div class="log-box">{% for line in runtime_logs %}{{ line }}
+{% endfor %}</div>
+    </section>
+
+    <section>
+      <h2>十、审计日志</h2>
+      <table class="data-table">
+        <tr><th>时间</th><th>操作</th><th>用户</th><th>详情</th></tr>
+        {% for log in audit_logs %}
+        <tr>
+          <td>{{ log.created_at }}</td>
+          <td>{{ log.action }}</td>
+          <td>{{ log.username }}</td>
+          <td>{{ log.details }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">暂无关联审计记录</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+
+    <section>
+      <h2>十一、会话配置快照</h2>
+      <pre>{{ config_pretty }}</pre>
+    </section>
+
+    <section>
+      <h2>十二、结论与建议</h2>
+      <p>本报告用于 XR 渲染性能与视觉质量<strong>预测试</strong>、辅助诊断和验收演示，不作为强制认证结论。</p>
+      <p>建议结合 Unity Profiler、RenderDoc 或设备厂商工具复核 GPU 瓶颈；对高 Draw Call、高纹理内存和长帧区间优先进行批处理、LOD、纹理压缩和渲染特性开关对比。</p>
+      <p class="footnote">{{ (quality.evaluation_mode or {}).description or '' }}</p>
+    </section>
+  </div>
+</body>
+</html>

@@ -111,6 +111,8 @@ const SessionResultPanel: React.FC<SessionResultPanelProps> = ({ sessionId }) =>
     );
   }
 
+  const sectionStatus = fullReport?.section_status;
+
   return (
     <div className="session-result-panel">
       <Row gutter={[16, 16]} className="session-result-panel__summary">
@@ -118,9 +120,9 @@ const SessionResultPanel: React.FC<SessionResultPanelProps> = ({ sessionId }) =>
           <Card className="session-result-panel__stat-card">
             <Statistic
               title="平均FPS"
-              value={fullReport?.fps_analysis?.mean ?? 0}
-              precision={1}
-              suffix="fps"
+              value={sectionStatus?.frame_rate === 'skipped' ? '跳过' : (fullReport?.fps_analysis?.mean ?? 0)}
+              precision={sectionStatus?.frame_rate === 'skipped' ? undefined : 1}
+              suffix={sectionStatus?.frame_rate === 'skipped' ? undefined : 'fps'}
               valueStyle={{ color: '#3b82f6' }}
             />
           </Card>

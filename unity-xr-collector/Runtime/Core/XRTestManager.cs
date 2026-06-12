@@ -496,6 +496,7 @@ namespace XRDataCollector.Core
             var memoryCollector = new MemoryCollector();
             var deviceCollector = new DeviceInfoCollector();
             var renderQualityCollector = new RenderQualityCollector(config);
+            var resourceMemoryCollector = new ResourceMemoryCollector(config);
 
             if (config.collectFrameRate)
                 allCollectors.Add(frameRateCollector);
@@ -509,8 +510,12 @@ namespace XRDataCollector.Core
                 allCollectors.Add(memoryCollector);
             if (config.collectDeviceInfo)
                 allCollectors.Add(deviceCollector);
-            allCollectors.Add(renderingStatsCollector);
-            allCollectors.Add(renderQualityCollector);
+            if (config.collectRenderingStats)
+                allCollectors.Add(renderingStatsCollector);
+            if (config.collectRenderQuality)
+                allCollectors.Add(renderQualityCollector);
+            if (config.collectMemory || config.collectRenderQuality)
+                allCollectors.Add(resourceMemoryCollector);
 
             if (config.collectCpuUsage)
                 batchCollectors.Add(cpuCollector);
@@ -520,8 +525,12 @@ namespace XRDataCollector.Core
                 batchCollectors.Add(memoryCollector);
             if (config.collectDeviceInfo)
                 batchCollectors.Add(deviceCollector);
-            batchCollectors.Add(renderingStatsCollector);
-            batchCollectors.Add(renderQualityCollector);
+            if (config.collectRenderingStats)
+                batchCollectors.Add(renderingStatsCollector);
+            if (config.collectRenderQuality)
+                batchCollectors.Add(renderQualityCollector);
+            if (config.collectMemory || config.collectRenderQuality)
+                batchCollectors.Add(resourceMemoryCollector);
 
             liveCollectors.Clear();
             if (config.collectCpuUsage)
@@ -534,8 +543,12 @@ namespace XRDataCollector.Core
             {
                 liveCollectors.Add(deviceCollector);
             }
-            liveCollectors.Add(renderingStatsCollector);
-            liveCollectors.Add(renderQualityCollector);
+            if (config.collectRenderingStats)
+                liveCollectors.Add(renderingStatsCollector);
+            if (config.collectRenderQuality)
+                liveCollectors.Add(renderQualityCollector);
+            if (config.collectMemory || config.collectRenderQuality)
+                liveCollectors.Add(resourceMemoryCollector);
         }
 
         private void Reset() => EnsureRuntimeState();

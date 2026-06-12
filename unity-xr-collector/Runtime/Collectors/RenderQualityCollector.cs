@@ -13,6 +13,8 @@ namespace XRDataCollector.Collectors
     /// </summary>
     public class RenderQualityCollector : IPerformanceCollector
     {
+        private const int MaxPenetrationColliders = 200;
+
         private int activeLightCount;
         private int realtimeLightCount;
         private int shadowCasterCount;
@@ -24,6 +26,8 @@ namespace XRDataCollector.Collectors
         private int renderTextureCount;
         private int rigidbodyCount;
         private int colliderCount;
+        private int postProcessingWarningCount;
+        private int penetrationEventCount;
         private readonly XRTestConfig config;
 
         public string CollectorName => "RenderQuality";
@@ -65,6 +69,8 @@ namespace XRDataCollector.Collectors
             sample.renderTextureCount = renderTextureCount;
             sample.rigidbodyCount = rigidbodyCount;
             sample.colliderCount = colliderCount;
+            sample.postProcessingWarningCount = postProcessingWarningCount;
+            sample.penetrationEventCount = penetrationEventCount;
         }
 
         private void ResetMetrics()
@@ -80,6 +86,8 @@ namespace XRDataCollector.Collectors
             renderTextureCount = IsPostProcessingMetricEnabled(config?.testPostProcessRenderTextures ?? true) ? 0 : -1;
             rigidbodyCount = IsPhysicsMetricEnabled(config?.testPhysicsRigidbodies ?? true) ? 0 : -1;
             colliderCount = IsPhysicsMetricEnabled(config?.testPhysicsColliders ?? true) ? 0 : -1;
+            postProcessingWarningCount = IsPostProcessingMetricEnabled(config?.testPostProcessWarnings ?? true) ? 0 : -1;
+            penetrationEventCount = IsPhysicsMetricEnabled(config?.testPhysicsPenetration ?? true) ? 0 : -1;
         }
 
         private bool IsLightingEnabled()
@@ -209,6 +217,8 @@ namespace XRDataCollector.Collectors
             }
             if (IsPostProcessingMetricEnabled(config?.testPostProcessRenderTextures ?? true))
                 renderTextureCount = Resources.FindObjectsOfTypeAll<RenderTexture>().Length;
+            if (IsPostProcessingMetricEnabled(config?.testPostProcessWarnings ?? true))
+                postProcessingWarningCount = AuditPostProcessingConfiguration();
         }
 
         private void CollectPhysicsMetrics()
@@ -217,6 +227,60 @@ namespace XRDataCollector.Collectors
                 rigidbodyCount = UnityEngine.Object.FindObjectsOfType<Rigidbody>().Length;
             if (IsPhysicsMetricEnabled(config?.testPhysicsColliders ?? true))
                 colliderCount = UnityEngine.Object.FindObjectsOfType<Collider>().Length;
+            if (IsPhysicsMetricEnabled(config?.testPhysicsPenetration ?? true))
+                penetrationEventCount = CountPenetratingColliderPairs();
+        }
+
+        private int AuditPostProcessingConfiguration()
+        {
+            var volumeType = Type.GetType("UnityEngine.Rendering.Volume, Unity.RenderPipelines.Core.Runtime");
+            if (volumeType == null) return 0;
+
+            int warningCount = 0;
+            var sharedProfileProperty = volumeType.GetProperty("sharedProfile");
+            foreach (var volume in UnityEngine.Object.FindObjectsOfType(volumeType))
+            {
+                if (!(volume is Behaviour behaviour) || !behaviour.isActiveAndEnabled) continue;
+                var profile = sharedProfileProperty?.GetValue(volume, null);
+                if (profile == null) warningCount++;
+            }
+            return warningCount;
+        }
+
+        private int CountPenetratingColliderPairs()
+        {
+            var allColliders = UnityEngine.Object.FindObjectsOfType<Collider>();
+            var colliders = new List<Collider>(Mathf.Min(allColliders.Length, MaxPenetrationColliders));
+            foreach (var collider in allColliders)
+            {
+                if (colliders.Count >= MaxPenetrationColliders) break;
+                if (collider == null || !collider.enabled || collider.isTrigger || !collider.gameObject.activeInHierarchy)
+                    continue;
+                colliders.Add(collider);
+            }
+
+            int penetrationCount = 0;
+            for (int i = 0; i < colliders.Count; i++)
+            {
+                var first = colliders[i];
+                for (int j = i + 1; j < colliders.Count; j++)
+                {
+                    var second = colliders[j];
+                    if (first.attachedRigidbody != null && first.attachedRigidbody == second.attachedRigidbody)
+                        continue;
+                    if (!first.bounds.Intersects(second.bounds))
+                        continue;
+
+                    if (Physics.ComputePenetration(
+                        first, first.transform.position, first.transform.rotation,
+                        second, second.transform.position, second.transform.rotation,
+                        out _, out float distance) && distance > 0.001f)
+                    {
+                        penetrationCount++;
+                    }
+                }
+            }
+            return penetrationCount;
         }
     }
 }

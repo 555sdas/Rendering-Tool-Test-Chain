@@ -8,6 +8,7 @@ from app.models.performance_sample import PerformanceSample
 from app.models.test_session import TestSession
 from app.models.threshold_rule import ThresholdRule
 from app.services.render_quality_service import RenderQualityService
+from app.services.test_scope_service import TestScopeService
 from app.utils.datetime import isoformat_utc
 
 
@@ -121,6 +122,8 @@ class PerformanceAnalysisService:
         if not session:
             return []
 
+        scope = TestScopeService.infer_scope_from_session_config(session.config or {})
+
         samples = (
             self.db.query(PerformanceSample)
             .filter(PerformanceSample.test_session_id == test_session_id)
@@ -148,7 +151,20 @@ class PerformanceAnalysisService:
             "draw_calls": [s.draw_calls for s in samples if s.draw_calls is not None],
         }
 
+        scope_metric_map = {
+            "fps": "frame_rate",
+            "frame_time_ms": "frame_time",
+            "cpu_usage_percent": "cpu",
+            "gpu_usage_percent": "gpu",
+            "memory_mb": "memory",
+            "battery_temperature": "memory",
+            "draw_calls": "gpu",
+        }
+
         for rule in rules:
+            scope_key = scope_metric_map.get(rule.metric_name)
+            if scope_key and not TestScopeService.is_metric_enabled(scope, scope_key):
+                continue
             values = metric_map.get(rule.metric_name, [])
             if not values:
                 continue
@@ -226,7 +242,55 @@ class PerformanceAnalysisService:
         if not session:
             raise ValueError("测试会话不存在")
 
+        scope = TestScopeService.infer_scope_from_session_config(session.config or {})
+        scope_summary = TestScopeService.build_scope_summary(scope)
+        data_availability = {
+            "frame_rate": bool(self.get_fps_analysis(test_session_id)),
+            "frame_time": bool(self.get_frame_time_analysis(test_session_id)),
+            "cpu": any(
+                sample.cpu_usage_percent is not None
+                for sample in self.db.query(PerformanceSample)
+                .filter(PerformanceSample.test_session_id == test_session_id)
+                .all()
+            ),
+            "gpu": any(
+                sample.gpu_usage_percent is not None
+                for sample in self.db.query(PerformanceSample)
+                .filter(PerformanceSample.test_session_id == test_session_id)
+                .all()
+            ),
+            "memory": bool(self.get_memory_analysis(test_session_id)),
+            "device_info": bool(session.device_model or session.os_version or session.xr_runtime),
+        }
+        section_status = TestScopeService.build_section_status(scope, data_availability=data_availability)
+
+        fps_analysis = self.get_fps_analysis(test_session_id) if TestScopeService.is_metric_enabled(scope, "frame_rate") else {"status": "skipped"}
+        frame_time_analysis = (
+            self.get_frame_time_analysis(test_session_id)
+            if TestScopeService.is_metric_enabled(scope, "frame_time")
+            else {"status": "skipped"}
+        )
+        memory_analysis = (
+            self.get_memory_analysis(test_session_id)
+            if TestScopeService.is_metric_enabled(scope, "memory")
+            else {"status": "skipped"}
+        )
+        thermal_analysis = (
+            self.get_thermal_analysis(test_session_id)
+            if TestScopeService.is_metric_enabled(scope, "memory")
+            else {"status": "skipped"}
+        )
+        stability_summary = (
+            self.get_stability_summary(test_session_id)
+            if TestScopeService.is_metric_enabled(scope, "frame_time")
+            else {"status": "skipped"}
+        )
+        resource_summary = self.get_resource_summary(test_session_id)
+
         return {
+            "test_scope": scope,
+            "test_scope_summary": scope_summary,
+            "section_status": section_status,
             "session_info": {
                 "id": session.id,
                 "name": session.name,
@@ -240,13 +304,13 @@ class PerformanceAnalysisService:
                 "ended_at": isoformat_utc(session.ended_at),
                 "duration_seconds": session.duration_seconds,
             },
-            "fps_analysis": self.get_fps_analysis(test_session_id),
-            "frame_time_analysis": self.get_frame_time_analysis(test_session_id),
-            "memory_analysis": self.get_memory_analysis(test_session_id),
-            "thermal_analysis": self.get_thermal_analysis(test_session_id),
+            "fps_analysis": fps_analysis,
+            "frame_time_analysis": frame_time_analysis,
+            "memory_analysis": memory_analysis,
+            "thermal_analysis": thermal_analysis,
             "threshold_violations": self.check_thresholds(test_session_id, session.project_id),
-            "stability_summary": self.get_stability_summary(test_session_id),
-            "resource_summary": self.get_resource_summary(test_session_id),
+            "stability_summary": stability_summary,
+            "resource_summary": resource_summary,
             "render_quality_assessment": RenderQualityService(self.db).evaluate_session(test_session_id),
         }
 

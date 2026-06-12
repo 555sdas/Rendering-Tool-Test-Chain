@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using XRDataCollector.Core;
 using XRDataCollector.Data;
+using XRDataCollector.Quality;
 
 namespace XRDataCollector.Network
 {
@@ -319,7 +320,7 @@ namespace XRDataCollector.Network
                 yield break;
             }
 
-            string jsonPayload = BuildJsonPayload(samples, session);
+            string jsonPayload = BuildJsonPayload(samples, session, config);
             bool uploadSuccess = false;
             yield return UploadCoroutine(uploadUrl, jsonPayload, token, success => uploadSuccess = success);
             callback?.Invoke(uploadSuccess);
@@ -435,7 +436,7 @@ namespace XRDataCollector.Network
             }
         }
 
-        private string BuildJsonPayload(List<PerformanceSample> samples, XRTestSession session)
+        private string BuildJsonPayload(List<PerformanceSample> samples, XRTestSession session, XRTestConfig config = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine("{");
@@ -460,6 +461,12 @@ namespace XRDataCollector.Network
                 sb.AppendLine($"    \"graphicsApi\": \"{EscapeJson(graphicsApi)}\",");
                 sb.AppendLine($"    \"renderPipeline\": \"{EscapeJson(renderPipeline)}\"");
                 sb.AppendLine("  },");
+            }
+
+            if (config != null)
+            {
+                var manifest = QualityMetricManifestBuilder.Build(config, samples);
+                sb.AppendLine("  \"qualityMetricManifest\": " + QualityMetricManifestBuilder.SerializeManifest(manifest) + ",");
             }
 
             sb.AppendLine("  \"sampleCount\": " + samples.Count + ",");
@@ -508,6 +515,8 @@ namespace XRDataCollector.Network
             sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
             sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
             sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
+            sb.AppendLine($"      \"textureMemoryMB\": {s.textureMemoryMB:F2},");
+            sb.AppendLine($"      \"renderTextureMemoryMB\": {s.renderTextureMemoryMB:F2},");
             AppendDeviceInfo(sb, s.deviceInfo);
             sb.AppendLine("      \"renderQuality\": {");
             sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
@@ -520,7 +529,9 @@ namespace XRDataCollector.Network
             sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
             sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
             sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
-            sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
+            sb.AppendLine($"        \"collider_count\": {s.colliderCount},");
+            sb.AppendLine($"        \"post_processing_warning_count\": {s.postProcessingWarningCount},");
+            sb.AppendLine($"        \"penetration_event_count\": {s.penetrationEventCount}");
             sb.AppendLine("      },");
         }
 
