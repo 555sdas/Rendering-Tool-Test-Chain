@@ -14,6 +14,8 @@ from app.routers import (
     audit_logs_router,
     cloud_ar_router,
     unity_runner_router,
+    system_settings_router,
+    progress_ws_router,
 )
 
 settings = get_settings()
@@ -42,6 +44,8 @@ app.include_router(exports_router, prefix=settings.API_V1_PREFIX)
 app.include_router(audit_logs_router, prefix=settings.API_V1_PREFIX)
 app.include_router(cloud_ar_router, prefix=settings.API_V1_PREFIX)
 app.include_router(unity_runner_router, prefix=settings.API_V1_PREFIX)
+app.include_router(system_settings_router, prefix=settings.API_V1_PREFIX)
+app.include_router(progress_ws_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.on_event("startup")

@@ -16,6 +16,8 @@ namespace XRDataCollector.Core
         private string sessionName;
         private DateTime startTime;
         private DateTime? endTime;
+        private long startTimeUtcTicks;
+        private long endTimeUtcTicks;
         private bool isActive;
         private int platformSessionId;
         private int platformRunIndex;
@@ -28,17 +30,23 @@ namespace XRDataCollector.Core
         public string SessionName => sessionName;
         public int PlatformSessionId => platformSessionId;
         public int PlatformRunIndex => platformRunIndex;
-        public DateTime StartTime => startTime;
-        public DateTime? EndTime => endTime;
+        public DateTime StartTime => startTimeUtcTicks > 0
+            ? new DateTime(startTimeUtcTicks, DateTimeKind.Utc)
+            : startTime;
+        public DateTime? EndTime => endTimeUtcTicks > 0
+            ? new DateTime(endTimeUtcTicks, DateTimeKind.Utc)
+            : endTime;
         public bool IsActive => isActive;
 
         public TimeSpan ElapsedTime
         {
             get
             {
-                if (!isActive && endTime.HasValue)
-                    return endTime.Value - startTime;
-                return DateTime.UtcNow - startTime;
+                var effectiveStart = StartTime;
+                var effectiveEnd = EndTime;
+                if (!isActive && effectiveEnd.HasValue)
+                    return effectiveEnd.Value - effectiveStart;
+                return DateTime.UtcNow - effectiveStart;
             }
         }
 
@@ -56,6 +64,7 @@ namespace XRDataCollector.Core
             sessionId = Guid.NewGuid().ToString("N");
             sessionName = name ?? "未命名会话";
             startTime = DateTime.UtcNow;
+            startTimeUtcTicks = startTime.Ticks;
             isActive = false;
         }
 
@@ -67,7 +76,9 @@ namespace XRDataCollector.Core
         {
             if (isActive) return;
             startTime = DateTime.UtcNow;
+            startTimeUtcTicks = startTime.Ticks;
             endTime = null;
+            endTimeUtcTicks = 0;
             isActive = true;
             Debug.Log($"[XRTestSession] 会话 '{sessionName}' ({sessionId}) 开始于 {startTime:O}");
         }
@@ -76,6 +87,7 @@ namespace XRDataCollector.Core
         {
             if (!isActive) return;
             endTime = DateTime.UtcNow;
+            endTimeUtcTicks = endTime.Value.Ticks;
             isActive = false;
             Debug.Log($"[XRTestSession] 会话 '{sessionName}' 结束于 {endTime:O}，时长：{ElapsedTime.TotalSeconds:F2}秒");
         }
@@ -97,8 +109,8 @@ namespace XRDataCollector.Core
                    $"ID：{sessionId}\n" +
                    $"平台会话 ID：{(platformSessionId > 0 ? platformSessionId.ToString() : "无")}\n" +
                    $"状态：{status}\n" +
-                   $"开始：{startTime:O}\n" +
-                   $"结束：{endTime?.ToString("O") ?? "无"}\n" +
+                   $"开始：{StartTime:O}\n" +
+                   $"结束：{EndTime?.ToString("O") ?? "无"}\n" +
                    $"时长：{duration.TotalSeconds:F2}秒\n" +
                    $"Unity：{UnityVersion}\n" +
                    $"应用：{ProductName} v{AppVersion}\n" +

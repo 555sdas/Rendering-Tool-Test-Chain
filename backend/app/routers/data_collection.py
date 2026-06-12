@@ -108,7 +108,13 @@ def _first_value(*values):
 
 
 def _try_parse_timestamp(value) -> Optional[datetime]:
-    return parse_utc_datetime(value)
+    parsed = parse_utc_datetime(value)
+    if not parsed:
+        return None
+    now = datetime.utcnow()
+    if parsed.year < 2000 or parsed > now + timedelta(days=1):
+        return None
+    return parsed
 
 
 def _parse_timestamp(value) -> datetime:
@@ -126,6 +132,13 @@ def _parse_float(value) -> Optional[float]:
             return float(value)
         except ValueError:
             return None
+    return None
+
+
+def _first_present(item: dict, *keys: str):
+    for key in keys:
+        if key in item and item[key] is not None:
+            return item[key]
     return None
 
 
@@ -499,26 +512,26 @@ async def add_performance_samples_batch(
             PerformanceSample(
                 test_session_id=session_id,
                 timestamp=timestamp,
-                frame_time_ms=item.get("frame_time_ms") or item.get("frameTimeMs"),
-                fps=item.get("fps") or item.get("frameRate"),
-                cpu_usage_percent=item.get("cpu_usage_percent") or item.get("cpuUsagePercent"),
-                gpu_usage_percent=item.get("gpu_usage_percent") or item.get("gpuUsagePercent"),
-                memory_mb=item.get("memory_mb") or item.get("totalMemoryMB"),
-                battery_level=item.get("battery_level") or item.get("batteryLevel"),
-                battery_temperature=item.get("battery_temperature") or item.get("batteryTemperature"),
-                draw_calls=item.get("draw_calls") or item.get("drawCalls"),
-                triangle_count=item.get("triangle_count") or item.get("triangles"),
-                vertex_count=item.get("vertex_count") or item.get("vertices"),
-                set_pass_calls=item.get("set_pass_calls") or item.get("setPassCalls"),
-                texture_memory_mb=item.get("texture_memory_mb") or item.get("textureMemoryMB"),
-                mesh_memory_mb=item.get("mesh_memory_mb") or item.get("meshMemoryMB"),
-                render_texture_memory_mb=item.get("render_texture_memory_mb") or item.get("renderTextureMemoryMB"),
-                gc_collect_count=item.get("gc_collect_count") or item.get("gcCollectCount"),
-                gc_allocated_mb=item.get("gc_allocated_mb") or item.get("gcAllocatedMB"),
-                screen_resolution=item.get("screen_resolution") or item.get("screenResolution"),
-                tracking_state=item.get("tracking_state") or item.get("trackingState"),
-                prediction_error_ms=item.get("prediction_error_ms") or item.get("predictionErrorMs"),
-                pose_latency_ms=item.get("pose_latency_ms") or item.get("poseLatencyMs"),
+                frame_time_ms=_first_present(item, "frame_time_ms", "frameTimeMs"),
+                fps=_first_present(item, "fps", "frameRate"),
+                cpu_usage_percent=_first_present(item, "cpu_usage_percent", "cpuUsagePercent"),
+                gpu_usage_percent=_first_present(item, "gpu_usage_percent", "gpuUsagePercent"),
+                memory_mb=_first_present(item, "memory_mb", "totalMemoryMB"),
+                battery_level=_first_present(item, "battery_level", "batteryLevel"),
+                battery_temperature=_first_present(item, "battery_temperature", "batteryTemperature"),
+                draw_calls=_first_present(item, "draw_calls", "drawCalls"),
+                triangle_count=_first_present(item, "triangle_count", "triangles"),
+                vertex_count=_first_present(item, "vertex_count", "vertices"),
+                set_pass_calls=_first_present(item, "set_pass_calls", "setPassCalls"),
+                texture_memory_mb=_first_present(item, "texture_memory_mb", "textureMemoryMB", "graphicsMemoryMB"),
+                mesh_memory_mb=_first_present(item, "mesh_memory_mb", "meshMemoryMB"),
+                render_texture_memory_mb=_first_present(item, "render_texture_memory_mb", "renderTextureMemoryMB"),
+                gc_collect_count=_first_present(item, "gc_collect_count", "gcCollectCount"),
+                gc_allocated_mb=_first_present(item, "gc_allocated_mb", "gcAllocatedMB"),
+                screen_resolution=_first_present(item, "screen_resolution", "screenResolution"),
+                tracking_state=_first_present(item, "tracking_state", "trackingState"),
+                prediction_error_ms=_first_present(item, "prediction_error_ms", "predictionErrorMs"),
+                pose_latency_ms=_first_present(item, "pose_latency_ms", "poseLatencyMs"),
                 extra_metrics=extra_metrics or None,
             )
         )
@@ -537,7 +550,11 @@ async def add_performance_samples_batch(
             or upload_session.get("durationSeconds")
             or upload_session.get("duration_seconds")
         )
+        if session_duration is not None and not 0 <= session_duration <= 7 * 24 * 60 * 60:
+            session_duration = None
         elapsed_duration = max(elapsed_seconds) if elapsed_seconds else None
+        if elapsed_duration is not None and elapsed_duration > 7 * 24 * 60 * 60:
+            elapsed_duration = None
         duration_candidates = [
             value for value in [timestamp_duration, session_duration, elapsed_duration]
             if value is not None

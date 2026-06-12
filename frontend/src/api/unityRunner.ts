@@ -20,6 +20,7 @@ export interface UnitySceneResource {
   scene_path: string;
   scene_file_path: string;
   enabled: boolean;
+  is_default: boolean;
   exists: boolean;
   collector_package_name: string;
   collector_package_path: string | null;
@@ -77,7 +78,7 @@ export interface UnityTestStartResponse {
   session: TestSession;
   engine: UnityEngineResource;
   scene: UnitySceneResource;
-  process_id: number;
+  process_id: number | null;
   task_config_path: string;
   unity_log_path: string;
   runner_log_path: string;
@@ -94,6 +95,58 @@ export interface UnityTaskLogsResponse {
   runner_log_path: string | null;
   unity_log_path: string | null;
   lines: string[];
+}
+
+export interface UnityRealtimeProgress {
+  type: 'unity_progress';
+  task_id: number;
+  session_id: number;
+  phase: string;
+  phase_label: string;
+  progress: number;
+  remaining_seconds: number;
+  sample_count: number;
+  fps: number;
+  frame_time_ms: number;
+  raw_frame_time_ms: number;
+  cpu_usage_percent: number;
+  gpu_usage_percent: number;
+  memory_mb: number;
+  managed_memory_mb: number;
+  graphics_memory_mb: number;
+  system_memory_mb: number;
+  draw_calls: number;
+  triangles: number;
+  vertices: number;
+  active_light_count: number;
+  realtime_light_count: number;
+  shadow_caster_count: number;
+  reflection_probe_count: number;
+  material_count: number;
+  unique_material_count: number;
+  transparent_material_count: number;
+  post_process_volume_count: number;
+  render_texture_count: number;
+  rigidbody_count: number;
+  collider_count: number;
+  is_xr_active: boolean;
+  xr_device_name: string;
+  device_model: string;
+  operating_system: string;
+  unity_version: string;
+  graphics_device_name: string;
+  render_pipeline: string;
+  screen_resolution: string;
+  received_at?: string;
+}
+
+export function createUnityProgressWebSocket(taskId: number): WebSocket {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+  const baseUrl = new URL(apiBase, window.location.origin);
+  baseUrl.protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  baseUrl.pathname = `${baseUrl.pathname.replace(/\/$/, '')}/unity-runner/progress/${taskId}/ws`;
+  baseUrl.search = `token=${encodeURIComponent(localStorage.getItem('xr_token') || '')}`;
+  return new WebSocket(baseUrl);
 }
 
 export const unityRunnerApi = {
@@ -120,5 +173,10 @@ export const unityRunnerApi = {
   getTaskLogs: async (taskId: number, params?: { tail_lines?: number }): Promise<UnityTaskLogsResponse> => {
     const response = await apiClient.get<UnityTaskLogsResponse>(`/unity-runner/test-tasks/${taskId}/logs`, { params });
     return response.data;
+  },
+
+  getLatestProgress: async (taskId: number): Promise<UnityRealtimeProgress | null> => {
+    const response = await apiClient.get<{ item: UnityRealtimeProgress | null }>(`/unity-runner/progress/${taskId}/latest`);
+    return response.data.item;
   },
 };

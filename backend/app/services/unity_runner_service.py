@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,16 +11,48 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.database import SessionLocal
 from app.models.project import Project
 from app.models.scene_asset import AssetType, SceneAsset
 from app.models.test_session import TestSession, TestSessionStatus
 from app.models.test_task import TestTask, TestTaskStatus
+from app.services.system_settings_service import SystemSettingsService
+from app.utils.datetime import to_utc_naive
 
 
 settings = get_settings()
 
 
 class UnityRunnerService:
+    PLUGIN_LOG_MARKERS = (
+        "XRBatchTestRunner",
+        "XRTestManager",
+        "TestSceneFlythroughActivator",
+        "UnityProgressReporter",
+        "TestDataUploader",
+        "XRDataCollector",
+        "[PROGRESS]",
+        "采集进度",
+        "采集配置",
+        "启动 Unity",
+        "Unity 进程",
+        "任务已投递",
+        "上传",
+        "样本 #",
+        "阶段1",
+        "阶段2",
+        "Play Mode",
+        "自动巡航",
+    )
+
+    UNITY_FATAL_LOG_MARKERS = {
+        "executeMethod class": "Unity 找不到自动化入口，请确认采集插件已成功编译。",
+        "Scripts have compiler errors": "Unity 项目存在脚本编译错误。",
+        "Compilation failed": "Unity 项目脚本编译失败。",
+        "Aborting batchmode due to failure": "Unity BatchMode 执行失败。",
+        "String conversion error: Illegal byte sequence": "Unity 读取启动环境变量失败。",
+    }
+
     def __init__(self, db: Session):
         self.db = db
         self.backend_root = Path(__file__).resolve().parents[2]
@@ -168,14 +201,15 @@ class UnityRunnerService:
             session.status = TestSessionStatus.FAILED.value
             session.ended_at = datetime.utcnow()
             if session.started_at:
-                session.duration_seconds = (session.ended_at - session.started_at).total_seconds()
+                session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
             self.db.commit()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"启动 Unity 失败：{exc}") from exc
 
         task_config = dict(task.config or {})
         task_config.update(
             {
-                "process_id": process.pid,
+                "process_id": process.pid if process else None,
+                "launch_mode": "new_editor" if process else "existing_editor",
                 "task_config_path": str(task_config_path),
                 "unity_log_path": str(unity_log_path),
                 "runner_log_path": str(runner_log_path),
@@ -188,7 +222,8 @@ class UnityRunnerService:
         session_config.update(
             {
                 "test_task_id": task.id,
-                "process_id": process.pid,
+                "process_id": process.pid if process else None,
+                "launch_mode": "new_editor" if process else "existing_editor",
                 "task_config_path": str(task_config_path),
                 "unity_log_path": str(unity_log_path),
                 "runner_log_path": str(runner_log_path),
@@ -200,14 +235,23 @@ class UnityRunnerService:
         self.db.refresh(task)
         self.db.refresh(session)
 
-        self._append_runner_log(runner_log_path, "INFO", f"Unity 进程已启动：pid={process.pid}")
+        if process:
+            self._append_runner_log(runner_log_path, "INFO", f"Unity 进程已启动：pid={process.pid}")
+            self._monitor_unity_process(
+                process=process,
+                task_id=task.id,
+                session_id=session.id,
+                runner_log_path=runner_log_path,
+            )
+        else:
+            self._append_runner_log(runner_log_path, "INFO", "任务已投递到当前打开的 Unity Editor。")
 
         return {
             "task": self._task_response(task),
             "session": self._session_response(session),
             "engine": self._public_engine(engine),
             "scene": self._public_scene(scene),
-            "process_id": process.pid,
+            "process_id": process.pid if process else None,
             "task_config_path": str(task_config_path),
             "unity_log_path": str(unity_log_path),
             "runner_log_path": str(runner_log_path),
@@ -228,12 +272,10 @@ class UnityRunnerService:
             TestTaskStatus.CANCELLED.value,
         }:
             self._append_runner_log(runner_log_path, "WARN", f"收到停止请求，准备终止 Unity 进程：pid={pid or '-'}")
-            if pid:
-                self._terminate_process(pid, runner_log_path)
             task.status = TestTaskStatus.CANCELLED.value
             task.completed_at = datetime.utcnow()
             if task.started_at:
-                task.duration_seconds = (task.completed_at - task.started_at).total_seconds()
+                task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
             task.error_message = "用户从 Web 端停止 Unity 测试"
 
         session = self._find_task_session(task)
@@ -245,12 +287,16 @@ class UnityRunnerService:
             session.status = TestSessionStatus.CANCELLED.value
             session.ended_at = datetime.utcnow()
             if session.started_at:
-                session.duration_seconds = (session.ended_at - session.started_at).total_seconds()
+                session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
 
         self.db.commit()
         self.db.refresh(task)
         if session:
             self.db.refresh(session)
+        if pid:
+            self._terminate_process(pid, runner_log_path)
+        else:
+            self._request_existing_editor_stop(task_config, task.id, runner_log_path)
         self._append_runner_log(runner_log_path, "INFO", "Unity 停止流程已完成，会话已标记为已取消。")
 
         return {
@@ -258,23 +304,44 @@ class UnityRunnerService:
             "session": self._session_response(session) if session else None,
         }
 
-    def get_task_logs(self, task_id: int, tail_lines: int = 220) -> dict[str, Any]:
+    def get_task_logs(self, task_id: int, tail_lines: int = 400) -> dict[str, Any]:
         task = self.db.query(TestTask).filter(TestTask.id == task_id).first()
         if not task:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unity 测试任务不存在")
 
         session = self._find_task_session(task)
         self._sync_completed_task_from_session(task, session)
+        self._sync_stale_task(task, session)
 
         config = dict(task.config or {})
         runner_log_path = self._path_or_none(config.get("runner_log_path"))
         unity_log_path = self._path_or_none(config.get("unity_log_path"))
 
-        runner_lines = self._tail_lines(runner_log_path, max(20, tail_lines // 3), "Runner 日志尚未生成。")
-        unity_lines = self._tail_lines(unity_log_path, tail_lines, "Unity 日志尚未生成，等待编辑器启动。")
-        lines = runner_lines + unity_lines
+        runner_limit = max(40, int(tail_lines * 0.45))
+        unity_limit = max(60, tail_lines - runner_limit)
+        runner_raw = self._read_log_lines(runner_log_path)
+        unity_raw = self._read_log_lines(unity_log_path)
+
+        lines: list[str] = []
+        if runner_raw:
+            lines.append("──────── 后端 Runner / 采集进度 ────────")
+            lines.extend(runner_raw[-runner_limit:])
+        else:
+            lines.append("Runner 日志尚未生成。")
+
+        unity_filtered = self._filter_unity_log_lines(unity_raw, unity_limit)
+        if unity_filtered:
+            lines.append("──────── Unity 插件 / 关键事件 ────────")
+            lines.extend(unity_filtered)
+        elif unity_raw:
+            lines.append("──────── Unity 原始日志（末尾） ────────")
+            lines.extend(unity_raw[-min(30, unity_limit):])
+        else:
+            lines.append("Unity 日志尚未生成，等待编辑器启动。")
+
         if len(lines) > tail_lines:
             lines = lines[-tail_lines:]
+        self._sync_failed_task_from_logs(task, session, lines, runner_log_path)
 
         return {
             "task": self._task_response(task),
@@ -284,6 +351,131 @@ class UnityRunnerService:
             "lines": lines,
         }
 
+    def append_progress_event_log(self, task: TestTask, payload: dict[str, Any]) -> None:
+        config = dict(task.config or {})
+        runner_log_path = self._path_or_none(config.get("runner_log_path"))
+        if not runner_log_path:
+            return
+
+        summary = dict(task.result_summary or {})
+        last_logged_at = summary.get("progress_log_last_at")
+        last_phase = summary.get("progress_log_last_phase")
+        last_sample_bucket = summary.get("progress_log_last_sample_bucket")
+        now = datetime.utcnow()
+
+        phase = str(payload.get("phase_label") or payload.get("phase") or "-")
+        sample_count = int(payload.get("sample_count") or 0)
+        sample_bucket = sample_count // 5
+        elapsed_seconds = 0.0
+        if isinstance(last_logged_at, str) and last_logged_at:
+            try:
+                elapsed_seconds = (now - datetime.fromisoformat(last_logged_at.replace("Z", ""))).total_seconds()
+            except ValueError:
+                elapsed_seconds = 999.0
+
+        should_log = (
+            phase != last_phase
+            or sample_bucket != last_sample_bucket
+            or not last_logged_at
+            or elapsed_seconds >= 6
+        )
+        if not should_log:
+            return
+
+        progress_pct = float(payload.get("progress") or 0) * 100
+        message = (
+            f"进度 {progress_pct:.0f}% | 阶段={phase} | 样本={sample_count} | "
+            f"FPS={float(payload.get('fps') or 0):.1f} | "
+            f"帧时={float(payload.get('frame_time_ms') or 0):.2f}ms | "
+            f"CPU={float(payload.get('cpu_usage_percent') or 0):.1f}% | "
+            f"GPU={float(payload.get('gpu_usage_percent') or 0):.1f}% | "
+            f"内存={float(payload.get('memory_mb') or 0):.0f}MB | "
+            f"显存={float(payload.get('graphics_memory_mb') or 0):.0f}MB | "
+            f"DrawCalls={int(payload.get('draw_calls') or 0)} | "
+            f"三角面={int(payload.get('triangles') or 0)} | "
+            f"顶点={int(payload.get('vertices') or 0)} | "
+            f"光源={int(payload.get('active_light_count') or 0)}/{int(payload.get('realtime_light_count') or 0)} | "
+            f"材质={int(payload.get('material_count') or 0)} | "
+            f"剩余={float(payload.get('remaining_seconds') or 0):.0f}s"
+        )
+        self._append_runner_log(runner_log_path, "PROGRESS", message)
+        summary["progress_log_last_at"] = now.isoformat() + "Z"
+        summary["progress_log_last_phase"] = phase
+        summary["progress_log_last_sample_bucket"] = sample_bucket
+        task.result_summary = summary
+
+    def reconcile_project_tasks(self, project_id: int) -> None:
+        tasks = (
+            self.db.query(TestTask)
+            .filter(TestTask.project_id == project_id)
+            .filter(TestTask.status.in_([
+                TestTaskStatus.RUNNING.value,
+                TestTaskStatus.QUEUED.value,
+                TestTaskStatus.PENDING.value,
+            ]))
+            .all()
+        )
+        for task in tasks:
+            session = self._find_task_session(task)
+            self._sync_completed_task_from_session(task, session)
+            self._sync_stale_task(task, session)
+
+    def _sync_stale_task(self, task: TestTask, session: TestSession | None) -> None:
+        if self._task_status_value(task.status) not in {
+            TestTaskStatus.RUNNING.value,
+            TestTaskStatus.QUEUED.value,
+            TestTaskStatus.PENDING.value,
+        }:
+            return
+
+        config = dict(task.config or {})
+        pid = self._int_or_none(config.get("process_id"))
+        elapsed = self._duration_seconds(task.started_at, datetime.utcnow())
+        expected = (
+            float(config.get("frame_rate_duration_seconds") or 30)
+            + float(config.get("metrics_duration_seconds") or 30)
+            + 180
+        )
+        process_missing = pid is not None and not self._process_exists(pid)
+        task_timed_out = elapsed > expected
+        if not (process_missing or task_timed_out):
+            return
+
+        reason = "Unity 进程已不存在，任务未完成结果上传" if process_missing else "Unity 测试长时间无结果，已自动结束残留任务"
+        task.status = TestTaskStatus.FAILED.value
+        task.error_message = reason
+        task.completed_at = datetime.utcnow()
+        if task.started_at:
+            task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
+        if session and self._session_status_value(session.status) in {
+            TestSessionStatus.RUNNING.value,
+            TestSessionStatus.PENDING.value,
+        }:
+            session.status = TestSessionStatus.FAILED.value
+            session.ended_at = task.completed_at
+            if session.started_at:
+                session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
+        self.db.commit()
+        self.db.refresh(task)
+        if session:
+            self.db.refresh(session)
+
+    def _process_exists(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _duration_seconds(self, start: datetime | None, end: datetime | None) -> float:
+        normalized_start = to_utc_naive(start)
+        normalized_end = to_utc_naive(end)
+        if not normalized_start or not normalized_end:
+            return 0
+        return max(0.0, (normalized_end - normalized_start).total_seconds())
+
     def _resolve_backend_path(self, value: str) -> Path:
         path = Path(value)
         if not path.is_absolute():
@@ -292,16 +484,28 @@ class UnityRunnerService:
 
     def _load_resource_items(self, kind: str) -> list[dict[str, Any]]:
         root = self.resource_root / kind
-        if not root.exists():
-            return []
-
         items: list[dict[str, Any]] = []
-        for path in sorted(root.glob("*.json")):
-            with path.open("r", encoding="utf-8") as file:
-                item = json.load(file)
-            item.setdefault("id", path.stem)
-            item["_config_path"] = str(path)
-            items.append(item)
+        if root.exists():
+            for path in sorted(root.glob("*.json")):
+                with path.open("r", encoding="utf-8") as file:
+                    item = json.load(file)
+                item.setdefault("id", path.stem)
+                item["_config_path"] = str(path)
+                items.append(item)
+
+        settings_service = SystemSettingsService()
+        if kind == "unity_engines":
+            configured_engine, _ = settings_service.get_unity_resources()
+            if configured_engine:
+                items = [item for item in items if item.get("id") != configured_engine.get("id")]
+                items.insert(0, configured_engine)
+        elif kind == "unity_projects":
+            configured_scenes = settings_service.get_unity_scene_resources()
+            if configured_scenes:
+                configured_ids = {item.get("id") for item in configured_scenes}
+                legacy_ids = {"system-settings-scene", *configured_ids}
+                items = [item for item in items if item.get("id") not in legacy_ids]
+                items = configured_scenes + items
         return items
 
     def _get_resource_item(self, kind: str, item_id: str) -> dict[str, Any]:
@@ -346,6 +550,18 @@ class UnityRunnerService:
         with manifest_path.open("w", encoding="utf-8") as file:
             json.dump(manifest, file, ensure_ascii=False, indent=2)
             file.write("\n")
+
+        packages_lock = project_path / "Packages" / "packages-lock.json"
+        if packages_lock.exists():
+            try:
+                with packages_lock.open("r", encoding="utf-8-sig") as file:
+                    lock_data = json.load(file)
+                if lock_data.get("dependencies", {}).pop(package_name, None) is not None:
+                    with packages_lock.open("w", encoding="utf-8") as file:
+                        json.dump(lock_data, file, ensure_ascii=False, indent=2)
+                        file.write("\n")
+            except (OSError, json.JSONDecodeError):
+                pass
 
     def _ensure_scene_asset(self, project_id: int, scene: dict[str, Any]) -> SceneAsset:
         project_path = Path(scene.get("project_path", ""))
@@ -452,6 +668,7 @@ class UnityRunnerService:
         unity_log_path = self.log_root / f"unity_task_{task.id}_session_{session.id}.unity.log"
         runner_log_path = self.log_root / f"unity_task_{task.id}_session_{session.id}.runner.log"
         upload_url = f"{settings.UNITY_RUNNER_PLATFORM_BASE_URL.rstrip('/')}/data-collection/test-sessions/{session.id}/samples/batch"
+        progress_url = f"{settings.UNITY_RUNNER_PLATFORM_BASE_URL.rstrip('/')}/unity-runner/progress/{task.id}"
 
         payload = {
             "taskId": task.id,
@@ -462,6 +679,7 @@ class UnityRunnerService:
             "projectName": (session.config or {}).get("platform_project_name", ""),
             "platformBaseUrl": settings.UNITY_RUNNER_PLATFORM_BASE_URL,
             "uploadUrl": upload_url,
+            "progressUrl": progress_url,
             "deviceToken": settings.DEVICE_TOKEN,
             "unityEnginePath": engine.get("executable_path"),
             "unityProjectPath": scene.get("project_path"),
@@ -479,6 +697,7 @@ class UnityRunnerService:
             "autoCreateSession": False,
             "autoStart": True,
             "quitOnComplete": True,
+            "forceAutoFlythroughOnStart": True,
             "batchmode": batchmode,
             "qualityChecks": {
                 "lighting": quality_checks.get("lighting", True),
@@ -501,7 +720,12 @@ class UnityRunnerService:
         task_config_path: Path,
         log_path: Path,
         batchmode: bool,
-    ) -> subprocess.Popen:
+    ) -> subprocess.Popen | None:
+        project_path = Path(scene["project_path"])
+        if self._is_project_open(project_path):
+            self._dispatch_to_existing_editor(project_path, task_config_path)
+            return None
+
         command = [
             engine["executable_path"],
             "-projectPath",
@@ -516,7 +740,58 @@ class UnityRunnerService:
         if batchmode:
             command.insert(1, "-batchmode")
 
-        return subprocess.Popen(command, cwd=str(self.backend_root))
+        return subprocess.Popen(
+            command,
+            cwd=str(self.backend_root),
+            env=self._unity_process_environment(),
+            start_new_session=os.name != "nt",
+        )
+
+    def _is_project_open(self, project_path: Path) -> bool:
+        lock_path = project_path / "Temp" / "UnityLockfile"
+        if not lock_path.exists():
+            return False
+        if os.name == "nt":
+            return True
+        try:
+            import fcntl
+
+            with lock_path.open("a") as lock_file:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    return False
+                except BlockingIOError:
+                    return True
+        except OSError:
+            return True
+
+    def _dispatch_to_existing_editor(self, project_path: Path, task_config_path: Path) -> None:
+        with task_config_path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+        payload["quitOnComplete"] = False
+        with task_config_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+
+        inbox = project_path / "Library" / "XRDataCollector" / "pending-task.json"
+        inbox.parent.mkdir(parents=True, exist_ok=True)
+        with inbox.open("w", encoding="utf-8") as file:
+            json.dump({"configPath": str(task_config_path)}, file, ensure_ascii=False)
+
+    def _request_existing_editor_stop(
+        self,
+        task_config: dict[str, Any],
+        task_id: int,
+        runner_log_path: Path | None,
+    ) -> None:
+        project_path = self._path_or_none(task_config.get("unity_project_path"))
+        if not project_path:
+            return
+        stop_request = project_path / "Library" / "XRDataCollector" / f"stop-task-{task_id}"
+        stop_request.parent.mkdir(parents=True, exist_ok=True)
+        stop_request.touch()
+        self._append_runner_log(runner_log_path, "INFO", "已向当前打开的 Unity Editor 发送停止请求。")
 
     def _find_task_session(self, task: TestTask) -> TestSession | None:
         config = dict(task.config or {})
@@ -547,9 +822,155 @@ class UnityRunnerService:
             return
         task.completed_at = task.completed_at or session.ended_at or datetime.utcnow()
         if task.started_at and task.completed_at:
-            task.duration_seconds = (task.completed_at - task.started_at).total_seconds()
+            task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
         self.db.commit()
         self.db.refresh(task)
+
+    def _sync_failed_task_from_logs(
+        self,
+        task: TestTask,
+        session: TestSession | None,
+        lines: list[str],
+        runner_log_path: Path | None,
+    ) -> None:
+        if self._task_status_value(task.status) not in {
+            TestTaskStatus.RUNNING.value,
+            TestTaskStatus.QUEUED.value,
+            TestTaskStatus.PENDING.value,
+        }:
+            return
+
+        text = "\n".join(lines)
+        error_message = next(
+            (message for marker, message in self.UNITY_FATAL_LOG_MARKERS.items() if marker in text),
+            None,
+        )
+        if not error_message:
+            return
+
+        task.status = TestTaskStatus.FAILED.value
+        task.error_message = error_message
+        task.completed_at = datetime.utcnow()
+        if task.started_at:
+            task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
+
+        if session and self._session_status_value(session.status) in {
+            TestSessionStatus.RUNNING.value,
+            TestSessionStatus.PENDING.value,
+        }:
+            session.status = TestSessionStatus.FAILED.value
+            session.ended_at = datetime.utcnow()
+            if session.started_at:
+                session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
+
+        self.db.commit()
+        self.db.refresh(task)
+        if session:
+            self.db.refresh(session)
+        self._append_runner_log(runner_log_path, "ERROR", error_message)
+
+    def _unity_process_environment(self) -> dict[str, str]:
+        """Return a small UTF-8 environment Unity 2022 can enumerate safely.
+
+        Some desktop shells inject environment values that Mono cannot convert.
+        Unity's Bee compiler enumerates every inherited variable, so passing the
+        whole backend environment can put the editor into Safe Mode before the
+        automation assembly is loaded.
+        """
+        allowed_keys = {
+            "HOME",
+            "PATH",
+            "TMPDIR",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "SSH_AUTH_SOCK",
+        }
+        environment: dict[str, str] = {}
+        for key in allowed_keys:
+            value = os.environ.get(key)
+            if not value:
+                continue
+            try:
+                key.encode("utf-8")
+                value.encode("utf-8")
+            except UnicodeError:
+                continue
+            environment[key] = value
+
+        environment.update(
+            {
+                "LANG": "en_US.UTF-8",
+                "LC_ALL": "en_US.UTF-8",
+                "LC_CTYPE": "en_US.UTF-8",
+            }
+        )
+        return environment
+
+    def _monitor_unity_process(
+        self,
+        *,
+        process: subprocess.Popen,
+        task_id: int,
+        session_id: int,
+        runner_log_path: Path,
+    ) -> None:
+        def monitor() -> None:
+            return_code = process.wait()
+            db = SessionLocal()
+            try:
+                task = db.query(TestTask).filter(TestTask.id == task_id).first()
+                session = db.query(TestSession).filter(TestSession.id == session_id).first()
+                if not task:
+                    return
+
+                task_status = self._task_status_value(task.status)
+                session_status = self._session_status_value(session.status) if session else ""
+                if session_status == TestSessionStatus.COMPLETED.value:
+                    task.status = TestTaskStatus.COMPLETED.value
+                    task.error_message = None
+                elif task_status in {
+                    TestTaskStatus.RUNNING.value,
+                    TestTaskStatus.QUEUED.value,
+                    TestTaskStatus.PENDING.value,
+                }:
+                    task.status = TestTaskStatus.FAILED.value
+                    task.error_message = (
+                        f"Unity 进程异常退出，退出码 {return_code}"
+                        if return_code != 0
+                        else "Unity 进程已退出，但未完成结果上传"
+                    )
+                    if session:
+                        session.status = TestSessionStatus.FAILED.value
+                        session.ended_at = datetime.utcnow()
+                        if session.started_at:
+                            session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
+                else:
+                    self._append_runner_log(
+                        runner_log_path,
+                        "INFO",
+                        f"Unity 进程已退出并回收：pid={process.pid}，退出码={return_code}，任务状态={task_status}",
+                    )
+                    return
+
+                task.completed_at = task.completed_at or datetime.utcnow()
+                if task.started_at:
+                    task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
+                db.commit()
+                self._append_runner_log(
+                    runner_log_path,
+                    "INFO" if task.status == TestTaskStatus.COMPLETED.value else "ERROR",
+                    f"Unity 进程已退出：pid={process.pid}，退出码={return_code}，任务状态={self._task_status_value(task.status)}",
+                )
+            finally:
+                db.close()
+
+        thread = threading.Thread(
+            target=monitor,
+            name=f"unity-runner-{task_id}",
+            daemon=True,
+        )
+        thread.start()
 
     def _terminate_process(self, pid: int, runner_log_path: Path | None) -> None:
         try:
@@ -571,14 +992,40 @@ class UnityRunnerService:
         except Exception as exc:
             self._append_runner_log(runner_log_path, "WARN", f"终止 Unity 进程失败：pid={pid}，{exc}")
 
-    def _tail_lines(self, path: Path | None, limit: int, missing_message: str) -> list[str]:
+    def _read_log_lines(self, path: Path | None) -> list[str]:
         if not path or not path.exists():
-            return [missing_message]
+            return []
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            return path.read_text(encoding="utf-8", errors="replace").splitlines()
         except Exception:
-            lines = path.read_text(errors="replace").splitlines()
-        return lines[-limit:] if lines else ["日志文件为空，等待新的输出。"]
+            return path.read_text(errors="replace").splitlines()
+
+    def _filter_unity_log_lines(self, lines: list[str], limit: int) -> list[str]:
+        if not lines:
+            return []
+
+        priority: list[str] = []
+        warnings: list[str] = []
+        for line in lines:
+            if any(marker in line for marker in self.PLUGIN_LOG_MARKERS):
+                priority.append(line)
+                continue
+            upper = line.upper()
+            if any(token in upper for token in ("ERROR", "EXCEPTION", "ASSERT", "WARNING", "TRACEBACK")):
+                warnings.append(line)
+
+        merged = priority + warnings[-30:]
+        if len(merged) < 12:
+            merged.extend(lines[-min(40, limit):])
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for line in merged:
+            if line in seen:
+                continue
+            seen.add(line)
+            deduped.append(line)
+        return deduped[-limit:]
 
     def _append_runner_log(self, path: Path | None, level: str, message: str) -> None:
         if not path:
@@ -695,6 +1142,7 @@ class UnityRunnerService:
             "scene_path": item.get("scene_path"),
             "scene_file_path": str(scene_file),
             "enabled": item.get("enabled", True),
+            "is_default": item.get("is_default", False),
             "exists": scene_file.exists(),
             "collector_package_name": package_name,
             "collector_package_path": item.get("collector_package_path"),

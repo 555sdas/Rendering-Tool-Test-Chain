@@ -1,0 +1,21 @@
+.session-result-panel__loading,
+.session-result-panel__empty {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 48px 0;
+  color: #8c8c8c;
+}
+
+.session-result-panel__summary {
+  margin-bottom: 16px;
+}
+
+.session-result-panel__stat-card {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.session-result-panel__tabs > .ant-tabs-nav {
+  margin-bottom: 16px;
+}

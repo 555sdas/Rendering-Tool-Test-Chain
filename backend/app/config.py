@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     UNITY_RUNNER_RESOURCE_DIR: str = "./resources"
     UNITY_RUNNER_TASK_DIR: str = "./runtime/unity_tasks"
     UNITY_RUNNER_LOG_DIR: str = "./runtime/unity_logs"
+    SYSTEM_SETTINGS_PATH: str = "./runtime/system_settings.json"
 
     PASSWORD_MIN_LENGTH: int = 8
     MAX_LOGIN_ATTEMPTS: int = 5

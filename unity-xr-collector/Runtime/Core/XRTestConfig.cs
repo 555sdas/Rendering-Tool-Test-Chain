@@ -56,6 +56,9 @@ namespace XRDataCollector.Core
         [Tooltip("数据上传地址")]
         public string uploadUrl = "";
 
+        [Tooltip("实时进度上报地址")]
+        public string progressUrl = "";
+
         /// <summary>
         /// 平台 API 根地址。部署到服务器后通常只需要改这里。
         /// </summary>
@@ -91,6 +94,9 @@ namespace XRDataCollector.Core
 
         [Tooltip("命令行测试结束后退出 Unity Editor")]
         public bool quitOnComplete = false;
+
+        [Tooltip("进入场景后立即启动巡航/演示模式（适用于含 PlayerManager 的演示场景）")]
+        public bool forceAutoFlythroughOnStart = true;
 
         /// <summary>
         /// 设备采集令牌。插件用此令牌向平台换取临时 JWT，无需存储用户名密码。
@@ -176,6 +182,35 @@ namespace XRDataCollector.Core
 
         [Tooltip("测试物理仿真指标")]
         public bool testPhysicsQuality = true;
+
+        [Header("光照与阴影细分指标")]
+        public bool testLightingActiveLights = true;
+        public bool testLightingRealtimeLights = true;
+        public bool testLightingShadowCasters = true;
+        public bool testLightingReflectionProbes = true;
+        public bool testLightingExposureArtifacts = true;
+
+        [Header("材质与纹理细分指标")]
+        public bool testMaterialSlots = true;
+        public bool testMaterialUniqueMaterials = true;
+        public bool testMaterialTransparentMaterials = true;
+        public bool testMaterialDrawCalls = true;
+        public bool testMaterialTextureMemory = true;
+
+        [Header("后处理细分指标")]
+        public bool testPostProcessVolumes = true;
+        public bool testPostProcessRenderTextures = true;
+        public bool testPostProcessRenderTextureMemory = true;
+        public bool testPostProcessGpuFrameBudget = true;
+        public bool testPostProcessWarnings = true;
+
+        [Header("物理仿真细分指标")]
+        public bool testPhysicsRigidbodies = true;
+        public bool testPhysicsColliders = true;
+        public bool testPhysicsPenetration = true;
+        public bool testPhysicsPoseLatency = true;
+        public bool testPhysicsPredictionError = true;
+        public bool testPhysicsLongFrames = true;
 
         /// <summary>
         /// 最大样本数量限制，超过此数量将停止采集（0 表示无限制）

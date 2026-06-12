@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Card,
   Descriptions,
@@ -7,6 +7,7 @@ import {
   Table,
   Button,
   message,
+  notification,
   Spin,
   Form,
   Select,
@@ -15,21 +16,33 @@ import {
   Alert,
   Space,
   Progress,
+  Steps,
+  Typography,
+  Tabs,
 } from 'antd';
+import SessionResultPanel from '@/components/SessionResultPanel';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  ClockCircleOutlined,
   EyeOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { projectsApi, type Project } from '@/api/projects';
-import { unityRunnerApi, type UnityEngineResource, type UnitySceneResource } from '@/api/unityRunner';
+import {
+  createUnityProgressWebSocket,
+  unityRunnerApi,
+  type UnityEngineResource,
+  type UnityRealtimeProgress,
+  type UnitySceneResource,
+} from '@/api/unityRunner';
 import type { TestSession } from '@/api/sessions';
 import { formatDateTime, getApiDateTime } from '@/lib/datetime';
+import './ProjectDetail.css';
 
 const { Option } = Select;
 
@@ -50,8 +63,14 @@ const sessionStatusMap: Record<string, { color: string; text: string }> = {
 
 const RUNNING_SESSION_STATUSES = new Set(['pending', 'running']);
 const TERMINAL_SESSION_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-const DEFAULT_LAUNCH_SECONDS = 6;
-const DEFAULT_UPLOAD_SECONDS = 8;
+
+function isCollectingProgress(progress: UnityRealtimeProgress): boolean {
+  return progress.phase !== 'uploading' && progress.phase_label !== '上传结果';
+}
+
+function isUploadingProgress(progress: UnityRealtimeProgress): boolean {
+  return progress.phase === 'uploading' || progress.phase_label === '上传结果';
+}
 
 interface ActiveUnityRun {
   taskId: number | null;
@@ -78,6 +97,19 @@ interface EstimatedRunProgress {
   tagColor: string;
   icon: React.ReactNode;
 }
+
+interface MetricTileProps {
+  label: string;
+  value: string | number;
+  accent?: string;
+}
+
+const MetricTile: React.FC<MetricTileProps> = ({ label, value, accent = '#111827' }) => (
+  <div className="unity-metric-tile">
+    <div className="unity-metric-label">{label}</div>
+    <div className="unity-metric-value" style={{ color: accent }}>{value}</div>
+  </div>
+);
 
 function getConfigNumber(config: Record<string, unknown> | null | undefined, key: string, fallback: number): number {
   const value = config?.[key];
@@ -131,7 +163,11 @@ function createActiveRunFromSession(
   };
 }
 
-function getEstimatedRunProgress(run: ActiveUnityRun, now: number): EstimatedRunProgress {
+function getRunProgressDisplay(
+  run: ActiveUnityRun,
+  now: number,
+  realtime: UnityRealtimeProgress | null,
+): EstimatedRunProgress {
   if (run.status === 'completed') {
     return {
       percent: 100,
@@ -160,33 +196,29 @@ function getEstimatedRunProgress(run: ActiveUnityRun, now: number): EstimatedRun
     };
   }
 
-  const frameSeconds = Math.max(1, run.frameRateDurationSeconds);
-  const metricsSeconds = Math.max(1, run.metricsDurationSeconds);
-  const totalSeconds = DEFAULT_LAUNCH_SECONDS + frameSeconds + metricsSeconds + DEFAULT_UPLOAD_SECONDS;
   const elapsedSeconds = Math.max(0, (now - run.startedAtMs) / 1000);
-  const remainingSeconds = Math.max(0, totalSeconds - elapsedSeconds);
-  const percent = Math.min(96, Math.max(2, Math.round((elapsedSeconds / totalSeconds) * 100)));
+  const elapsedText = formatDuration(elapsedSeconds);
 
-  let phase = 'Unity 启动中';
-  let detail = '正在打开编辑器并载入场景';
-
-  if (elapsedSeconds >= DEFAULT_LAUNCH_SECONDS + frameSeconds + metricsSeconds) {
-    phase = '上传确认中';
-    detail = '等待 Unity 上传样本并刷新会话状态';
-  } else if (elapsedSeconds >= DEFAULT_LAUNCH_SECONDS + frameSeconds) {
-    phase = '指标采集中';
-    detail = 'CPU、GPU、内存和渲染质量指标';
-  } else if (elapsedSeconds >= DEFAULT_LAUNCH_SECONDS) {
-    phase = '帧率采集中';
-    detail = 'FPS 和帧时间采样';
+  if (!realtime) {
+    return {
+      percent: 0,
+      phase: '等待 Unity',
+      detail: '正在启动编辑器并载入场景，采集开始后进度条将更新',
+      elapsedText,
+      remainingText: '等待采集开始',
+      statusText: sessionStatusMap[run.status]?.text || '运行中',
+      progressStatus: 'normal',
+      tagColor: 'processing',
+      icon: <LoadingOutlined />,
+    };
   }
 
   return {
-    percent,
-    phase,
-    detail,
-    elapsedText: formatDuration(elapsedSeconds),
-    remainingText: remainingSeconds > 0 ? formatDuration(remainingSeconds) : '等待确认',
+    percent: Math.min(100, Math.max(0, Math.round(realtime.progress * 100))),
+    phase: realtime.phase_label,
+    detail: `已采集 ${realtime.sample_count} 个实时样本`,
+    elapsedText,
+    remainingText: formatDuration(realtime.remaining_seconds),
     statusText: sessionStatusMap[run.status]?.text || '运行中',
     progressStatus: 'active',
     tagColor: 'processing',
@@ -194,9 +226,36 @@ function getEstimatedRunProgress(run: ActiveUnityRun, now: number): EstimatedRun
   };
 }
 
+function getCollectionStepState(
+  run: ActiveUnityRun,
+  realtime: UnityRealtimeProgress | null,
+): { current: number; status: 'process' | 'finish' | 'error' } {
+  if (run.status === 'completed') {
+    return { current: 4, status: 'finish' };
+  }
+
+  if (run.status === 'failed' || run.status === 'cancelled') {
+    let current = 0;
+    if (realtime) {
+      if (isUploadingProgress(realtime)) current = 3;
+      else if (realtime.phase === 'metrics' || realtime.phase_label.includes('指标')) current = 2;
+      else if (isCollectingProgress(realtime)) current = 1;
+    }
+    return { current, status: 'error' };
+  }
+
+  if (!realtime) return { current: 0, status: 'process' };
+  if (isUploadingProgress(realtime)) return { current: 3, status: 'process' };
+  if (realtime.phase === 'metrics' || realtime.phase_label.includes('指标')) {
+    return { current: 2, status: 'process' };
+  }
+  return { current: 1, status: 'process' };
+}
+
 const ProjectDetail: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [project, setProject] = useState<Project | null>(null);
   const [sessions, setSessions] = useState<TestSession[]>([]);
   const [engines, setEngines] = useState<UnityEngineResource[]>([]);
@@ -204,7 +263,37 @@ const ProjectDetail: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [activeRun, setActiveRun] = useState<ActiveUnityRun | null>(null);
+  const [taskLogs, setTaskLogs] = useState<string[]>([]);
+  const liveLogRef = React.useRef<HTMLPreElement>(null);
+  const collectionNotifyRef = useRef<{ taskId: number | null; started: boolean; ended: boolean }>({
+    taskId: null,
+    started: false,
+    ended: false,
+  });
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [realtimeProgress, setRealtimeProgress] = useState<UnityRealtimeProgress | null>(null);
+  const [realtimeConnection, setRealtimeConnection] = useState<'connecting' | 'live' | 'polling'>('connecting');
   const [now, setNow] = useState(Date.now());
+  const [activeTab, setActiveTab] = useState(() => (searchParams.get('tab') === 'history' ? 'history' : 'unity'));
+
+  const handleTabChange = (key: string) => {
+    setActiveTab(key);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (key === 'unity') {
+          next.delete('tab');
+        } else {
+          next.set('tab', key);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
+  const [showUnityConfig, setShowUnityConfig] = useState(true);
+  const [resultSessionId, setResultSessionId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
   const loadSessions = useCallback(async () => {
@@ -230,7 +319,10 @@ const ProjectDetail: React.FC = () => {
         setScenes(sceneData);
 
         const defaultEngine = engineData.find((item) => item.is_default && item.enabled) || engineData[0];
-        const defaultScene = sceneData.find((item) => item.enabled) || sceneData[0];
+        const defaultScene =
+          sceneData.find((item) => item.is_default && item.enabled) ||
+          sceneData.find((item) => item.enabled) ||
+          sceneData[0];
         form.setFieldsValue({
           unity_engine_id: defaultEngine?.id,
           scene_resource_id: defaultScene?.id,
@@ -268,17 +360,26 @@ const ProjectDetail: React.FC = () => {
         return updatedRun;
       }
 
+      if (showUnityConfig) return null;
+
       const runningSession = sessions.find((session) => {
         const config = session.config || {};
+        const startedAt = getApiDateTime(session.started_at);
+        const expectedSeconds =
+          getConfigNumber(config, 'frame_rate_duration_seconds', 30) +
+          getConfigNumber(config, 'metrics_duration_seconds', 30) +
+          180;
+        const isRecent = startedAt !== null && Date.now() - startedAt <= expectedSeconds * 1000;
         return (
           RUNNING_SESSION_STATUSES.has(session.status) &&
+          isRecent &&
           (config.source === 'web_unity_runner' || Boolean(config.test_task_id))
         );
       });
 
       return runningSession ? createActiveRunFromSession(runningSession) : null;
     });
-  }, [sessions]);
+  }, [sessions, showUnityConfig]);
 
   useEffect(() => {
     if (!activeRun || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
@@ -294,13 +395,158 @@ const ProjectDetail: React.FC = () => {
     if (!activeRun || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
 
     const refreshTimer = window.setInterval(() => {
-      loadSessions().catch(() => {
-        message.warning('刷新会话状态失败');
-      });
+      Promise.all([
+        loadSessions(),
+        activeRun.taskId ? unityRunnerApi.getTaskLogs(activeRun.taskId, { tail_lines: 400 }) : Promise.resolve(null),
+      ])
+        .then(([, logs]) => {
+          if (!logs) return;
+          setTaskLogs(logs.lines || []);
+          setTaskError(logs.task.error_message || null);
+          if (logs.session) {
+            setActiveRun((current) => current ? createActiveRunFromSession(logs.session!, current) : current);
+          }
+        })
+        .catch(() => {
+          message.warning('刷新 Unity 任务状态失败');
+        });
     }, 3000);
 
     return () => window.clearInterval(refreshTimer);
   }, [activeRun, loadSessions]);
+
+  useEffect(() => {
+    const logElement = liveLogRef.current;
+    if (!logElement) return;
+    logElement.scrollTop = logElement.scrollHeight;
+  }, [taskLogs]);
+
+  useEffect(() => {
+    if (!activeRun?.taskId || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
+    const taskId = activeRun.taskId;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let disposed = false;
+
+    const connect = () => {
+      if (disposed) return;
+      setRealtimeConnection('connecting');
+      socket = createUnityProgressWebSocket(taskId);
+      socket.onopen = () => setRealtimeConnection('live');
+      socket.onmessage = (event) => {
+        try {
+          const progress = JSON.parse(event.data) as UnityRealtimeProgress;
+          if (progress.type === 'unity_progress')
+            setRealtimeProgress(progress);
+        } catch {
+          // HTTP fallback below continues refreshing if a message is malformed.
+        }
+      };
+      socket.onclose = () => {
+        if (disposed) return;
+        setRealtimeConnection('polling');
+        reconnectTimer = window.setTimeout(connect, 2000);
+      };
+      socket.onerror = () => setRealtimeConnection('polling');
+    };
+    connect();
+
+    const fetchLatestProgress = () => {
+      unityRunnerApi.getLatestProgress(taskId)
+        .then((progress) => {
+          if (progress) setRealtimeProgress(progress);
+        })
+        .catch(() => {
+          if (socket?.readyState !== WebSocket.OPEN)
+            setRealtimeConnection('polling');
+        });
+    };
+    fetchLatestProgress();
+    const pollingTimer = window.setInterval(fetchLatestProgress, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(pollingTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [activeRun?.status, activeRun?.taskId]);
+
+  useEffect(() => {
+    const taskId = activeRun?.taskId;
+    if (!taskId || !activeRun || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
+
+    if (collectionNotifyRef.current.taskId !== taskId) {
+      collectionNotifyRef.current = { taskId, started: false, ended: false };
+    }
+
+    if (!realtimeProgress) return;
+
+    if (isCollectingProgress(realtimeProgress) && !collectionNotifyRef.current.started) {
+      collectionNotifyRef.current.started = true;
+      notification.success({
+        message: '采集已开始',
+        description: `${realtimeProgress.phase_label}，Unity 已开始上报实时数据。`,
+        placement: 'topRight',
+        duration: 5,
+      });
+    }
+
+    if (
+      collectionNotifyRef.current.started &&
+      !collectionNotifyRef.current.ended &&
+      isUploadingProgress(realtimeProgress)
+    ) {
+      collectionNotifyRef.current.ended = true;
+      notification.info({
+        message: '采集已结束',
+        description: `共采集 ${realtimeProgress.sample_count} 个样本，正在上传结果…`,
+        placement: 'topRight',
+        duration: 6,
+      });
+    }
+  }, [activeRun, activeRun?.taskId, activeRun?.status, realtimeProgress]);
+
+  useEffect(() => {
+    if (!activeRun?.taskId) return;
+    if (!TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
+    if (collectionNotifyRef.current.taskId !== activeRun.taskId) return;
+    if (!collectionNotifyRef.current.started || collectionNotifyRef.current.ended) return;
+
+    collectionNotifyRef.current.ended = true;
+    if (activeRun.status === 'completed') {
+      notification.success({
+        message: '采集已结束',
+        description: `会话 ${activeRun.sessionName} 已完成，可前往分析页查看结果。`,
+        placement: 'topRight',
+        duration: 6,
+      });
+      return;
+    }
+
+    if (activeRun.status === 'cancelled') {
+      notification.warning({
+        message: '采集已取消',
+        description: '测试任务已被手动停止。',
+        placement: 'topRight',
+        duration: 6,
+      });
+      return;
+    }
+
+    notification.error({
+      message: '采集失败',
+      description: taskError || '请查看 Unity 实时日志了解详情。',
+      placement: 'topRight',
+      duration: 8,
+    });
+  }, [activeRun, activeRun?.status, activeRun?.sessionName, activeRun?.taskId, taskError]);
+
+  useEffect(() => {
+    if (activeRun?.status === 'completed') {
+      setResultSessionId(activeRun.sessionId);
+    }
+  }, [activeRun?.sessionId, activeRun?.status]);
 
   const handleStartUnityTest = async (values: {
     unity_engine_id: string;
@@ -343,6 +589,14 @@ const ProjectDetail: React.FC = () => {
           startedAtMs: Date.now(),
         }),
       );
+      collectionNotifyRef.current = { taskId: result.task.id, started: false, ended: false };
+      setShowUnityConfig(false);
+      setTaskLogs([]);
+      setTaskError(null);
+      setRealtimeProgress(null);
+      setRealtimeConnection('connecting');
+      setResultSessionId(null);
+      setActiveTab('unity');
       setNow(Date.now());
       message.success(`Unity 已启动，任务 ${result.task.id}，会话 ${result.session.name}`);
       await loadSessions();
@@ -353,7 +607,37 @@ const ProjectDetail: React.FC = () => {
     }
   };
 
-  const activeEstimate = activeRun ? getEstimatedRunProgress(activeRun, now) : null;
+  const handleRestartUnityTest = () => {
+    setShowUnityConfig(true);
+    setActiveRun(null);
+    setRealtimeProgress(null);
+    setTaskLogs([]);
+    setTaskError(null);
+    setResultSessionId(null);
+    setRealtimeConnection('connecting');
+    collectionNotifyRef.current = { taskId: null, started: false, ended: false };
+  };
+
+  const handleStopUnityTest = async () => {
+    if (!activeRun?.taskId) return;
+    setStopping(true);
+    try {
+      const result = await unityRunnerApi.stopTest(activeRun.taskId);
+      if (result.session) {
+        setActiveRun(createActiveRunFromSession(result.session, activeRun));
+      }
+      message.success('Unity 测试已停止');
+      await loadSessions();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '停止 Unity 测试失败');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const activeEstimate = activeRun ? getRunProgressDisplay(activeRun, now, realtimeProgress) : null;
+  const collectionStep = activeRun ? getCollectionStepState(activeRun, realtimeProgress) : null;
+  const showUnitySession = !showUnityConfig && Boolean(launching || activeRun);
 
   if (loading) {
     return <Spin size="large" style={{ display: 'flex', justifyContent: 'center', marginTop: 80 }} />;
@@ -401,7 +685,16 @@ const ProjectDetail: React.FC = () => {
       title: '操作',
       key: 'action',
       render: (_: unknown, record: TestSession) => (
-        <Button type="text" icon={<EyeOutlined />} size="small" onClick={() => navigate(`/analysis?sessionId=${record.id}&projectId=${project.id}`)}>
+        <Button
+          type="text"
+          icon={<EyeOutlined />}
+          size="small"
+          onClick={() =>
+            navigate(`/analysis?sessionId=${record.id}&projectId=${project.id}`, {
+              state: { returnTo: `/projects/${project.id}?tab=history` },
+            })
+          }
+        >
           分析
         </Button>
       ),
@@ -444,47 +737,40 @@ const ProjectDetail: React.FC = () => {
         </Descriptions>
       </Card>
 
-      <Card
-        title="Unity 本地测试"
-        extra={
-          <Button icon={<ReloadOutlined />} onClick={loadSessions}>
-            刷新会话
-          </Button>
-        }
-        style={{ marginBottom: 24 }}
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="从后端已登记的 Unity 引擎和场景资源启动测试，Unity 插件会把采集结果上传并绑定到本项目的新会话。"
-        />
+      <Card style={{ marginBottom: 24 }} className="project-test-card">
+        <Tabs
+          activeKey={activeTab}
+          onChange={handleTabChange}
+          className="project-test-tabs"
+          items={[
+            {
+              key: 'unity',
+              label: 'Unity 本地测试',
+              children: (
+                <>
+        {showUnityConfig && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="从后端已登记的 Unity 引擎和场景资源启动测试，Unity 插件会把采集结果上传并绑定到本项目的新会话。"
+          />
+        )}
 
-        {activeRun && activeEstimate && (
-          <div
-            style={{
-              marginBottom: 20,
-              padding: 18,
-              border: '1px solid #d6e4ff',
-              borderRadius: 8,
-              background: 'linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                gap: 16,
-                marginBottom: 12,
-              }}
-            >
+        {showUnitySession && activeRun && activeEstimate && (
+          <div className="unity-monitor">
+            <div className="unity-monitor-header">
               <div>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-                  当前测试会话 {activeRun.sessionName}
+                <div className="unity-monitor-title">
+                  <ThunderboltOutlined className="unity-monitor-title-icon" />
+                  {TERMINAL_SESSION_STATUSES.has(activeRun.status) ? '最近一次采集' : '采集进行中'}
+                  <Tag color="blue">{activeEstimate.phase}</Tag>
+                  <Tag color={realtimeConnection === 'live' ? 'success' : realtimeConnection === 'polling' ? 'warning' : 'default'}>
+                    {realtimeConnection === 'live' ? 'WebSocket 实时连接' : realtimeConnection === 'polling' ? '实时轮询连接' : '正在连接实时数据'}
+                  </Tag>
                 </div>
-                <div style={{ color: '#64748b', fontSize: 13 }}>
-                  任务 {activeRun.taskId || '-'} · 进程 {activeRun.processId || '-'}
+                <div className="unity-monitor-subtitle">
+                  会话 {activeRun.sessionName} · 任务 {activeRun.taskId || '-'} · 进程 {activeRun.processId || '-'}
                   {activeRun.engineName ? ` · ${activeRun.engineName}` : ''}
                   {activeRun.sceneName ? ` · ${activeRun.sceneName}` : ''}
                 </div>
@@ -496,142 +782,306 @@ const ProjectDetail: React.FC = () => {
                 <Button
                   size="small"
                   icon={<EyeOutlined />}
-                  onClick={() => navigate(`/analysis?sessionId=${activeRun.sessionId}&projectId=${project.id}`)}
+                  onClick={() =>
+                    navigate(`/analysis?sessionId=${activeRun.sessionId}&projectId=${project.id}`, {
+                      state: { returnTo: `/projects/${project.id}?tab=unity` },
+                    })
+                  }
                 >
                   分析
                 </Button>
+                {!TERMINAL_SESSION_STATUSES.has(activeRun.status) && activeRun.taskId && (
+                  <Button danger size="small" icon={<StopOutlined />} loading={stopping} onClick={handleStopUnityTest}>
+                    停止
+                  </Button>
+                )}
+                {TERMINAL_SESSION_STATUSES.has(activeRun.status) && (
+                  <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={handleRestartUnityTest}>
+                    再次开始测试
+                  </Button>
+                )}
               </Space>
             </div>
 
-            <Progress
-              percent={activeEstimate.percent}
-              status={activeEstimate.progressStatus}
-              strokeWidth={12}
-              trailColor="#e8eef7"
-              strokeColor={{
-                '0%': '#1677ff',
-                '55%': '#13c2c2',
-                '100%': '#52c41a',
-              }}
-            />
+            <div className="unity-monitor-body">
+              <div className="unity-monitor-summary">
+                <div className="unity-progress-row">
+                  <Progress
+                    percent={activeEstimate.percent}
+                    status={activeEstimate.progressStatus}
+                    strokeWidth={11}
+                    showInfo={false}
+                    trailColor="#edf1f5"
+                    strokeColor={{ '0%': '#1677ff', '100%': '#52c41a' }}
+                  />
+                  <strong>{activeEstimate.percent}%</strong>
+                </div>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                gap: 12,
-                marginTop: 14,
-              }}
-            >
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>当前阶段</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.detail}</div>
+                <div className="unity-core-metrics">
+                  <MetricTile label="FPS" value={`${(realtimeProgress?.fps ?? 0).toFixed(1)} fps`} accent="#3b82f6" />
+                  <MetricTile label="CPU" value={`${(realtimeProgress?.cpu_usage_percent ?? 0).toFixed(1)} %`} accent="#f59e0b" />
+                  <MetricTile label="GPU" value={`${(realtimeProgress?.gpu_usage_percent ?? 0).toFixed(1)} %`} accent="#10b981" />
+                  <MetricTile label="内存" value={`${(realtimeProgress?.memory_mb ?? 0).toFixed(0)} MB`} />
+                  <MetricTile label="样本数" value={realtimeProgress?.sample_count ?? 0} />
+                  <MetricTile label="阶段" value={activeEstimate.phase} />
+                </div>
+
+                <div className="unity-run-meta">
+                  <span>已运行：{activeEstimate.elapsedText}</span>
+                  <span>剩余：{activeEstimate.remainingText}</span>
+                  <span>实时更新：{realtimeProgress?.received_at ? formatDateTime(realtimeProgress.received_at) : '等待 Unity 上报'}</span>
+                  <span>{activeEstimate.detail}</span>
+                </div>
+
+                <Steps
+                  className="unity-phase-steps"
+                  size="small"
+                  current={collectionStep?.current ?? 0}
+                  status={collectionStep?.status}
+                  items={[
+                    { title: '启动 Unity', description: '冷启动编辑器' },
+                    {
+                      title: '帧率采集',
+                      description: `${activeRun.frameRateDurationSeconds}s`,
+                    },
+                    {
+                      title: '指标采集',
+                      description: `${activeRun.metricsDurationSeconds}s`,
+                    },
+                    { title: '上传结果', description: '同步到平台' },
+                    { title: '完成', description: '可查看分析' },
+                  ]}
+                />
               </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>会话状态</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.statusText}</div>
-              </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>已运行</div>
-                <div style={{ fontWeight: 600 }}>
-                  <ClockCircleOutlined style={{ marginRight: 6, color: '#1677ff' }} />
-                  {activeEstimate.elapsedText}
+
+              <div className="unity-monitor-panels">
+                <div className="unity-monitor-side">
+                  <div className="unity-side-panel">
+                    <div className="unity-side-panel-title">运行详情</div>
+                    <div className="unity-side-panel-body">
+                      {realtimeProgress ? (
+                        <Descriptions
+                          className="unity-detail-metrics unity-detail-metrics--embedded"
+                          bordered
+                          size="small"
+                          column={2}
+                        >
+                          <Descriptions.Item label="图形设备">{realtimeProgress.graphics_device_name || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="渲染管线">{realtimeProgress.render_pipeline || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="设备型号">{realtimeProgress.device_model || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="操作系统">{realtimeProgress.operating_system || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="Unity 版本">{realtimeProgress.unity_version || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="分辨率">{realtimeProgress.screen_resolution || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="帧时间">{realtimeProgress.frame_time_ms.toFixed(2)} ms</Descriptions.Item>
+                          <Descriptions.Item label="原始帧时间">{realtimeProgress.raw_frame_time_ms.toFixed(2)} ms</Descriptions.Item>
+                          <Descriptions.Item label="Draw Calls">{realtimeProgress.draw_calls}</Descriptions.Item>
+                          <Descriptions.Item label="三角形">{realtimeProgress.triangles.toLocaleString()}</Descriptions.Item>
+                          <Descriptions.Item label="顶点">{realtimeProgress.vertices.toLocaleString()}</Descriptions.Item>
+                          <Descriptions.Item label="托管内存">{realtimeProgress.managed_memory_mb.toFixed(1)} MB</Descriptions.Item>
+                          <Descriptions.Item label="显存">{realtimeProgress.graphics_memory_mb.toFixed(1)} MB</Descriptions.Item>
+                          <Descriptions.Item label="系统内存">{realtimeProgress.system_memory_mb.toFixed(1)} MB</Descriptions.Item>
+                          <Descriptions.Item label="材质/唯一">{realtimeProgress.material_count} / {realtimeProgress.unique_material_count}</Descriptions.Item>
+                          <Descriptions.Item label="透明材质">{realtimeProgress.transparent_material_count}</Descriptions.Item>
+                          <Descriptions.Item label="活动/实时光源">{realtimeProgress.active_light_count} / {realtimeProgress.realtime_light_count}</Descriptions.Item>
+                          <Descriptions.Item label="阴影投射器">{realtimeProgress.shadow_caster_count}</Descriptions.Item>
+                          <Descriptions.Item label="反射探针">{realtimeProgress.reflection_probe_count}</Descriptions.Item>
+                          <Descriptions.Item label="后处理/RT">{realtimeProgress.post_process_volume_count} / {realtimeProgress.render_texture_count}</Descriptions.Item>
+                          <Descriptions.Item label="刚体/碰撞体">{realtimeProgress.rigidbody_count} / {realtimeProgress.collider_count}</Descriptions.Item>
+                          <Descriptions.Item label="XR" span={2}>
+                            {realtimeProgress.is_xr_active ? realtimeProgress.xr_device_name || '活动' : '未活动'}
+                          </Descriptions.Item>
+                        </Descriptions>
+                      ) : (
+                        <Alert
+                          className="unity-waiting-panel"
+                          type="info"
+                          showIcon
+                          message="等待 Unity 就绪"
+                          description="编辑器启动、场景加载与插件初始化完成后，将自动开始采集并显示详细指标。"
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="unity-live-log">
+                  <div className="unity-live-log-title">
+                    <span>实时日志</span>
+                    <Tag color={realtimeConnection === 'live' ? 'green' : realtimeConnection === 'polling' ? 'orange' : 'default'}>
+                      {realtimeConnection === 'live' ? 'LIVE' : realtimeConnection === 'polling' ? 'POLL' : 'WAIT'}
+                    </Tag>
+                  </div>
+                  <pre ref={liveLogRef}>
+                    {taskLogs.length > 0 ? taskLogs.slice(-80).join('\n') : '等待 Unity 日志输出...'}
+                  </pre>
                 </div>
               </div>
-              <div style={{ padding: '10px 12px', background: '#ffffff', border: '1px solid #edf2f7', borderRadius: 6 }}>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 4 }}>预计剩余</div>
-                <div style={{ fontWeight: 600 }}>{activeEstimate.remainingText}</div>
-              </div>
             </div>
+
+            {taskError && (
+              <Alert
+                type="error"
+                showIcon
+                message="Unity 自动化执行失败"
+                description={taskError}
+                style={{ marginTop: 14 }}
+              />
+            )}
+
           </div>
         )}
 
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleStartUnityTest}
-        >
-          <Form.Item
-            name="unity_engine_id"
-            label="Unity 引擎"
-            rules={[{ required: true, message: '请选择 Unity 引擎' }]}
-          >
-            <Select placeholder="请选择 Unity 引擎">
-              {engines.map((engine) => (
-                <Option key={engine.id} value={engine.id} disabled={!engine.enabled || !engine.exists}>
-                  {engine.name} {engine.exists ? '' : '（路径不存在）'}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
+        {showUnitySession && launching && !activeRun && (
+          <div className="unity-launching-placeholder">
+            <Spin size="large" tip="正在启动 Unity…" />
+          </div>
+        )}
 
-          <Form.Item
-            name="scene_resource_id"
-            label="场景资源"
-            rules={[{ required: true, message: '请选择场景资源' }]}
-          >
-            <Select placeholder="请选择场景资源">
-              {scenes.map((scene) => (
-                <Option key={scene.id} value={scene.id} disabled={!scene.enabled || !scene.exists}>
-                  {scene.name} {scene.manifest_has_plugin ? '' : '（将自动写入插件包）'}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
+        {showUnityConfig && (
+          <>
+            <div className="unity-config-heading">
+              <Typography.Title level={4}>测试配置</Typography.Title>
+              <Typography.Text type="secondary">原有配置保持不变，可继续调整场景、采集时长与质量测试项。</Typography.Text>
+            </div>
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={handleStartUnityTest}
+            >
+              <Form.Item
+                name="unity_engine_id"
+                label="Unity 引擎"
+                rules={[{ required: true, message: '请选择 Unity 引擎' }]}
+              >
+                <Select placeholder="请选择 Unity 引擎">
+                  {engines.map((engine) => (
+                    <Option key={engine.id} value={engine.id} disabled={!engine.enabled || !engine.exists}>
+                      {engine.name} {engine.exists ? '' : '（路径不存在）'}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
 
-          <Space size="large" wrap>
-            <Form.Item name="collect_interval" label="采集间隔（秒）" rules={[{ required: true }]}>
-              <InputNumber min={0.1} max={10} step={0.1} style={{ width: 160 }} />
-            </Form.Item>
-            <Form.Item name="frame_rate_duration_seconds" label="帧率采集时长（秒）" rules={[{ required: true }]}>
-              <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
-            </Form.Item>
-            <Form.Item name="metrics_duration_seconds" label="指标采集时长（秒）" rules={[{ required: true }]}>
-              <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
-            </Form.Item>
-          </Space>
+              <Form.Item
+                name="scene_resource_id"
+                label="测试场景"
+                extra="场景列表由系统设置中的 Unity 项目目录自动扫描生成。"
+                rules={[{ required: true, message: '请选择测试场景' }]}
+              >
+                <Select
+                  className="unity-scene-select"
+                  placeholder={scenes.length > 0 ? '请选择测试场景' : '请先在系统设置中配置 Unity 项目目录'}
+                  showSearch
+                  optionLabelProp="label"
+                  filterOption={(input, option) => {
+                    const scene = scenes.find((item) => item.id === option?.value);
+                    if (!scene) return false;
+                    const keyword = input.trim().toLowerCase();
+                    const haystack = `${scene.name} ${scene.scene_path}`.toLowerCase();
+                    return haystack.includes(keyword);
+                  }}
+                >
+                  {scenes.map((scene) => (
+                    <Option
+                      key={scene.id}
+                      value={scene.id}
+                      label={scene.name}
+                      disabled={!scene.enabled || !scene.exists}
+                    >
+                      <div className="unity-scene-option">
+                        <div className="unity-scene-option__name">{scene.name}</div>
+                        <div className="unity-scene-option__path">{scene.scene_path}</div>
+                      </div>
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
 
-          <Form.Item
-            name="quality_checks"
-            label="渲染质量测试项"
-            rules={[{ required: true, message: '请至少选择一个测试项' }]}
-          >
-            <Checkbox.Group
-              options={[
-                { label: '光照与阴影', value: 'lighting' },
-                { label: '材质与纹理', value: 'materials' },
-                { label: '后处理', value: 'post_processing' },
-                { label: '物理仿真', value: 'physics' },
-              ]}
-            />
-          </Form.Item>
+              <Space size="large" wrap>
+                <Form.Item name="collect_interval" label="采集间隔（秒）" rules={[{ required: true }]}>
+                  <InputNumber min={0.1} max={10} step={0.1} style={{ width: 160 }} />
+                </Form.Item>
+                <Form.Item name="frame_rate_duration_seconds" label="帧率采集时长（秒）" rules={[{ required: true }]}>
+                  <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
+                </Form.Item>
+                <Form.Item name="metrics_duration_seconds" label="指标采集时长（秒）" rules={[{ required: true }]}>
+                  <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
+                </Form.Item>
+              </Space>
 
-          <Space size="large" wrap>
-            <Form.Item name="ensure_plugin" valuePropName="checked">
-              <Checkbox>缺少插件时自动写入 manifest</Checkbox>
-            </Form.Item>
-            <Form.Item name="batchmode" valuePropName="checked">
-              <Checkbox>使用 BatchMode</Checkbox>
-            </Form.Item>
-          </Space>
+              <Form.Item
+                name="quality_checks"
+                label="渲染质量测试项"
+                rules={[{ required: true, message: '请至少选择一个测试项' }]}
+              >
+                <Checkbox.Group
+                  options={[
+                    { label: '光照与阴影', value: 'lighting' },
+                    { label: '材质与纹理', value: 'materials' },
+                    { label: '后处理', value: 'post_processing' },
+                    { label: '物理仿真', value: 'physics' },
+                  ]}
+                />
+              </Form.Item>
 
-          <Button
-            type="primary"
-            htmlType="submit"
-            icon={<PlayCircleOutlined />}
-            loading={launching}
-          >
-            启动 Unity 测试
-          </Button>
-        </Form>
-      </Card>
+              <Space size="large" wrap>
+                <Form.Item name="ensure_plugin" valuePropName="checked">
+                  <Checkbox>缺少插件时自动写入 manifest</Checkbox>
+                </Form.Item>
+                <Form.Item name="batchmode" valuePropName="checked">
+                  <Checkbox>使用 BatchMode</Checkbox>
+                </Form.Item>
+              </Space>
 
-      <Card title="关联测试会话">
-        <Table
-          columns={sessionColumns}
-          dataSource={sessions}
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<PlayCircleOutlined />}
+                loading={launching}
+              >
+                启动 Unity 测试
+              </Button>
+            </Form>
+          </>
+        )}
+
+        {showUnitySession && resultSessionId && activeRun?.status === 'completed' && (
+          <div className="unity-result-section">
+            <div className="unity-result-heading">
+              <Typography.Title level={4}>测试结果</Typography.Title>
+              <Typography.Text type="secondary">
+                会话 {activeRun.sessionName} 已完成，以下为性能分析图表
+              </Typography.Text>
+            </div>
+            <SessionResultPanel sessionId={resultSessionId} />
+          </div>
+        )}
+                </>
+              ),
+            },
+            {
+              key: 'history',
+              label: '历史测试记录',
+              children: (
+                <>
+                  <div className="history-tab-toolbar">
+                    <Typography.Text type="secondary">
+                      查看本项目关联的全部测试会话，可跳转完整性能分析页
+                    </Typography.Text>
+                    <Button icon={<ReloadOutlined />} onClick={loadSessions}>
+                      刷新会话
+                    </Button>
+                  </div>
+                  <Table
+                    columns={sessionColumns}
+                    dataSource={sessions}
+                    rowKey="id"
+                    pagination={{ pageSize: 10 }}
+                  />
+                </>
+              ),
+            },
+          ]}
         />
       </Card>
     </div>

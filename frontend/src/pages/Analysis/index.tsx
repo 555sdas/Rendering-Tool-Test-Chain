@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Progress, Space, Descriptions, Button } from 'antd';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Card, Row, Col, Select, Statistic, Tabs, Table, Tag, message, Space, Button } from 'antd';
+import RenderQualityPanel from '@/components/RenderQualityPanel';
+import SessionDeviceInfoPanel from '@/components/SessionDeviceInfoPanel';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   LineChart,
   Line,
@@ -17,10 +19,9 @@ import {
   Cell,
 } from 'recharts';
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
-import { analysisApi, type FullReport, type RenderQualityCategory } from '@/api/analysis';
+import { analysisApi, type FullReport } from '@/api/analysis';
 import { reportsApi } from '@/api/reports';
 import { sessionsApi, type PerformanceSample, type TestSession } from '@/api/sessions';
-import { getConfigNumber, getConfigString } from '@/lib/sessionConfig';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -96,10 +97,14 @@ function buildReportFilename(sessionId: number, sessionName?: string | null) {
 const Analysis: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const sessionIdParam = searchParams.get('sessionId');
   const projectIdParam = searchParams.get('projectId');
   const projectId = projectIdParam ? Number(projectIdParam) : undefined;
   const projectFilterId = projectId && Number.isFinite(projectId) ? projectId : undefined;
+  const returnTo =
+    (location.state as { returnTo?: string } | null)?.returnTo ??
+    (projectFilterId ? `/projects/${projectFilterId}` : '/projects');
   const [selectedSessions, setSelectedSessions] = useState<string[]>(sessionIdParam ? [sessionIdParam] : ['session1', 'session2']);
   const [sessionOptions, setSessionOptions] = useState(fallbackSessionOptions);
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
@@ -162,15 +167,6 @@ const Analysis: React.FC = () => {
     loadAnalysis();
   }, [selectedSessions]);
 
-  const reportConfig = fullReport?.session_info.config || selectedSessionDetail?.config;
-  const getReportString = (keys: string[], fallback = '-') => getConfigString(reportConfig, keys, fallback);
-  const getReportNumber = (keys: string[]) => getConfigNumber(reportConfig, keys);
-  const unityVersion = getReportString(['unity_version', 'unityVersion'], '');
-  const engineDisplay = getReportString(['engine'], unityVersion ? `Unity ${unityVersion}` : '-');
-  const graphicsApiDisplay = getReportString(
-    ['graphics_api', 'graphicsApi', 'graphicsDeviceType'],
-    getReportString(['gpu_version', 'graphicsDeviceVersion']),
-  );
   const selectedSessionId = Number(selectedSessions[0]);
   const canExportReport = Number.isFinite(selectedSessionId);
 
@@ -240,63 +236,10 @@ const Analysis: React.FC = () => {
     ? sampleChartData.filter((d) => d.fps > 0).slice(0, 30)
     : [];
   const resourceChartData = sampleChartData.length
-    ? sampleChartData.filter((d) => d.cpu > 0 || d.gpu > 0).slice(-30)
+    ? sampleChartData.slice(-30)
     : [];
 
   const renderQuality = fullReport?.render_quality_assessment;
-  const qualityColumns = [
-    {
-      title: '维度',
-      dataIndex: 'name',
-      key: 'name',
-      render: (text: string) => <strong>{text}</strong>,
-    },
-    {
-      title: '得分',
-      dataIndex: 'score',
-      key: 'score',
-      width: 180,
-      render: (value: number | null, record: RenderQualityCategory) => (
-        record.tested === false || value === null || value === undefined
-          ? <Tag color="default">未测试</Tag>
-          : <Progress percent={Math.round(value)} size="small" />
-      ),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 100,
-      render: (value: string) => {
-        const color = value === '通过' ? 'green' : value === '需关注' ? 'orange' : value === '未测试' ? 'default' : 'red';
-        return <Tag color={color}>{value}</Tag>;
-      },
-    },
-    {
-      title: '主要依据',
-      key: 'metrics',
-      render: (_: unknown, record: RenderQualityCategory) => (
-        <span>
-          {Object.entries(record.metrics)
-            .filter(([, value]) => value !== null && value !== undefined)
-            .slice(0, 4)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join('；') || '暂无专项采集指标'}
-        </span>
-      ),
-    },
-    {
-      title: '扣分项',
-      key: 'deductions',
-      render: (_: unknown, record: RenderQualityCategory) => (
-        <span>
-          {record.deductions.length
-            ? record.deductions.map((item) => `${item.reason}(-${item.points})`).join('；')
-            : record.tested === false ? '本次未勾选，不参与评分' : '无明显扣分项'}
-        </span>
-      ),
-    },
-  ];
 
   return (
     <div>
@@ -305,7 +248,7 @@ const Analysis: React.FC = () => {
           <Button
             type="text"
             icon={<ArrowLeftOutlined />}
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(returnTo)}
           >
             返回
           </Button>
@@ -451,45 +394,7 @@ const Analysis: React.FC = () => {
         </TabPane>
 
         <TabPane tab="渲染质量" key="render-quality">
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="总体质量分"
-                  value={renderQuality?.overall_score ?? '未测试'}
-                  precision={renderQuality?.overall_score == null ? undefined : 1}
-                  suffix={renderQuality?.overall_score == null ? '' : '/ 100'}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic title="质量等级" value={renderQuality?.grade ?? '-'} />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic title="证据样本数" value={renderQuality?.evidence.sample_count ?? 0} />
-              </Card>
-            </Col>
-          </Row>
-          <Card
-            title="光照、材质、后处理与物理仿真评分"
-            extra={<Tag color={renderQuality?.evidence.has_runtime_quality_metrics ? 'blue' : 'orange'}>
-              {renderQuality?.evaluation_mode.type ?? '未评估'}
-            </Tag>}
-          >
-            <Table
-              columns={qualityColumns}
-              dataSource={renderQuality?.categories || []}
-              rowKey="key"
-              pagination={false}
-              size="middle"
-            />
-            <div style={{ color: '#64748b', marginTop: 12 }}>
-              {renderQuality?.evaluation_mode.description}
-            </div>
-          </Card>
+          <RenderQualityPanel assessment={renderQuality} />
         </TabPane>
 
         <TabPane tab="多设备对比" key="comparison">
@@ -504,92 +409,7 @@ const Analysis: React.FC = () => {
         </TabPane>
 
         <TabPane tab="设备信息" key="device-info">
-          {fullReport?.session_info ? (
-            <Card>
-              <Row gutter={[16, 16]}>
-                <Col xs={24} sm={12}>
-                  <Descriptions title="设备概况" bordered size="small" column={1}>
-                    <Descriptions.Item label="设备名称">
-                      {getReportString(['device_name', 'deviceName'], fullReport.session_info.device_model || '-')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="设备型号">
-                      {getReportString(['device_model', 'deviceModel'], fullReport.session_info.device_model || '-')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="操作系统">
-                      {getReportString(['os_version', 'operatingSystem'], fullReport.session_info.os_version || '-')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="屏幕分辨率">
-                      {getReportString(['screen_resolution', 'screenResolution'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="运行环境">
-                      {getReportString(['xr_runtime', 'xrRuntime', 'runtime_mode', 'runtimeMode'], fullReport.session_info.xr_runtime || '-')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="应用版本">
-                      {getReportString(['app_version', 'appVersion'], fullReport.session_info.app_version || '-')}
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Col>
-                <Col xs={24} sm={12}>
-                  <Descriptions title="硬件规格" bordered size="small" column={1}>
-                    <Descriptions.Item label="CPU 型号">
-                      {getReportString(['cpu_model', 'processorType'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="CPU 核心数">
-                      {String(getReportNumber(['processor_count', 'processorCount']) ?? '-')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="GPU 型号">
-                      {getReportString(['gpu_model', 'graphicsDeviceName'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="GPU 厂商">
-                      {getReportString(['gpu_vendor', 'graphicsDeviceVendor'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="GPU 驱动版本">
-                      {getReportString(['gpu_version', 'graphicsDeviceVersion'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="显存">
-                      {getReportNumber(['gpu_memory_mb', 'graphicsMemorySize']) != null
-                        ? `${getReportNumber(['gpu_memory_mb', 'graphicsMemorySize'])} MB`
-                        : '-'}
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Col>
-              </Row>
-              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-                <Col xs={24} sm={12}>
-                  <Descriptions title="内存与引擎" bordered size="small" column={1}>
-                    <Descriptions.Item label="系统内存">
-                      {getReportNumber(['system_memory_mb', 'systemMemorySize']) != null
-                        ? `${getReportNumber(['system_memory_mb', 'systemMemorySize'])} MB`
-                        : getReportNumber(['ram_gb']) != null
-                          ? `${getReportNumber(['ram_gb'])} GB`
-                          : '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Unity 版本">
-                      {engineDisplay}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="图形 API">
-                      {graphicsApiDisplay}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="渲染管线">
-                      {getReportString(['render_pipeline', 'renderPipeline'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="XR 设备名称">
-                      {getReportString(['xr_device_name', 'xrDeviceName'])}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="样本数">
-                      {String(getReportNumber(['sample_count', 'sampleCount']) ?? '-')}
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Col>
-              </Row>
-            </Card>
-          ) : (
-            <Card>
-              <div style={{ textAlign: 'center', color: '#8c8c8c', padding: 40 }}>
-                暂无设备信息，请先运行测试采集
-              </div>
-            </Card>
-          )}
+          <SessionDeviceInfoPanel sessionInfo={fullReport?.session_info} />
         </TabPane>
       </Tabs>
     </div>

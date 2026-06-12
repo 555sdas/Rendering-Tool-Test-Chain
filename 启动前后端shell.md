@@ -12,7 +12,7 @@ docker compose up -d postgres redis
 
 ```bash
 cd backend
-./venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+./venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
 ```
 
 ### 3. 启动前端（终端2）

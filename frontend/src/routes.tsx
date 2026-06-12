@@ -8,6 +8,7 @@ import Projects from '@/pages/Projects';
 import ProjectDetail from '@/pages/Projects/ProjectDetail';
 import Sessions from '@/pages/Sessions';
 import Analysis from '@/pages/Analysis';
+import Settings from '@/pages/Settings';
 
 const AppRoutes: React.FC = () => {
   return (
@@ -27,7 +28,7 @@ const AppRoutes: React.FC = () => {
         <Route path="projects/:projectId" element={<ProjectDetail />} />
         <Route path="sessions" element={<Sessions />} />
         <Route path="analysis" element={<Analysis />} />
-        <Route path="settings" element={<div>系统设置页面开发中...</div>} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

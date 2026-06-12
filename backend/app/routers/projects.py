@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.project import Project, ProjectStatus, ProjectType
 from app.models.test_session import TestSession
+from app.services.unity_runner_service import UnityRunnerService
 from app.core.permissions import Permission, require_permission, get_current_user
 from app.services.audit_service import log_audit
 from app.utils.datetime import isoformat_utc
@@ -114,6 +115,7 @@ async def list_project_test_sessions(
             detail="项目不存在",
         )
 
+    UnityRunnerService(db).reconcile_project_tasks(project_id)
     query = db.query(TestSession).filter(TestSession.project_id == project_id)
     total = query.count()
     sessions = query.order_by(desc(TestSession.created_at)).offset(skip).limit(limit).all()

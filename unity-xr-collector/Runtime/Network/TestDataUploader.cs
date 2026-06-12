@@ -25,6 +25,22 @@ namespace XRDataCollector.Network
         #region Public Methods
 
         /// <summary>
+        /// 预创建协程宿主，避免在 OnDestroy 等生命周期回调中动态生成场景对象。
+        /// </summary>
+        public static void EnsureRuntimeHost()
+        {
+            UploaderHost.EnsureInstance();
+        }
+
+        /// <summary>
+        /// 销毁上传协程宿主，应在上传回调返回后延迟调用，避免与 UnityWebRequest 同栈销毁。
+        /// </summary>
+        public static void DestroyInstance()
+        {
+            UploaderHost.DestroyInstance();
+        }
+
+        /// <summary>
         /// 异步上传测试数据
         /// </summary>
         public void UploadAsync(List<PerformanceSample> samples, XRTestSession session, string url, string authToken, Action<bool> callback)
@@ -52,6 +68,7 @@ namespace XRDataCollector.Network
             }
 
             string jsonPayload = BuildJsonPayload(samples, session);
+            LogUploadSummary(samples, session, url);
             host.StartCoroutine(UploadCoroutine(url, jsonPayload, authToken, callback));
         }
 
@@ -79,6 +96,7 @@ namespace XRDataCollector.Network
                 return;
             }
 
+            LogUploadSummary(samples, session, config.uploadUrl);
             host.StartCoroutine(AutoSyncCoroutine(samples, session, config, callback));
         }
 
@@ -130,16 +148,21 @@ namespace XRDataCollector.Network
 
         private MonoBehaviour GetCoroutineHost()
         {
-            if (coroutineHost != null) return coroutineHost;
-            if (XRTestManager.Instance != null)
-            {
-                coroutineHost = XRTestManager.Instance;
+            if (coroutineHost != null)
                 return coroutineHost;
-            }
 
-            var go = new GameObject("XRTestUploaderHost");
-            coroutineHost = go.AddComponent<UploaderHost>();
+            coroutineHost = UploaderHost.EnsureInstance();
             return coroutineHost;
+        }
+
+        private void LogUploadSummary(List<PerformanceSample> samples, XRTestSession session, string url)
+        {
+            var last = samples[samples.Count - 1];
+            Debug.Log(
+                $"[TestDataUploader] 准备上传：session={session?.PlatformSessionId ?? 0}, samples={samples.Count}, " +
+                $"url={url}, lastPhase={last.collectionPhase}, FPS={last.frameRate:F1}, CPU={last.cpuUsagePercent:F1}%, " +
+                $"GPU={last.gpuUsagePercent:F1}%, 内存={last.totalMemoryMB:F1}MB, DrawCalls={last.drawCalls}, " +
+                $"设备信息={(last.deviceInfo != null ? "有" : "无")}。");
         }
 
         private IEnumerator UploadCoroutine(string url, string jsonPayload, string authToken, Action<bool> callback)
@@ -454,36 +477,17 @@ namespace XRDataCollector.Network
                 {
                     sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
                     sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
-                    sb.AppendLine("      \"extraMetrics\": {");
-                    sb.AppendLine("        \"collection_phase\": \"frame_rate\"");
-                    sb.AppendLine("      }");
                 }
-                else
+                else if (s.collectionPhase == "metrics")
                 {
-                    sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
-                    sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
-                    sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
-                    sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
-                    sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
-                    sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
-                    AppendDeviceInfo(sb, s.deviceInfo);
-                    sb.AppendLine("      \"renderQuality\": {");
-                    sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
-                    sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
-                    sb.AppendLine($"        \"shadow_caster_count\": {s.shadowCasterCount},");
-                    sb.AppendLine($"        \"reflection_probe_count\": {s.reflectionProbeCount},");
-                    sb.AppendLine($"        \"material_count\": {s.materialCount},");
-                    sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
-                    sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
-                    sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
-                    sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
-                    sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
-                    sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
-                    sb.AppendLine("      },");
-                    sb.AppendLine("      \"extraMetrics\": {");
-                    sb.AppendLine("        \"collection_phase\": \"metrics\"");
-                    sb.AppendLine("      }");
+                    sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
+                    sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
                 }
+
+                AppendPerformanceMetrics(sb, s);
+                sb.AppendLine("      \"extraMetrics\": {");
+                sb.AppendLine($"        \"collection_phase\": \"{EscapeJson(s.collectionPhase)}\"");
+                sb.AppendLine("      }");
 
                 sb.Append("    }");
                 sb.AppendLine(i < samples.Count - 1 ? "," : "");
@@ -492,6 +496,32 @@ namespace XRDataCollector.Network
             sb.AppendLine("  ]");
             sb.AppendLine("}");
             return sb.ToString();
+        }
+
+        private void AppendPerformanceMetrics(StringBuilder sb, PerformanceSample s)
+        {
+            sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
+            sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
+            sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
+            sb.AppendLine($"      \"triangles\": {s.triangles},");
+            sb.AppendLine($"      \"vertices\": {s.vertices},");
+            sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
+            sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
+            sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
+            AppendDeviceInfo(sb, s.deviceInfo);
+            sb.AppendLine("      \"renderQuality\": {");
+            sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
+            sb.AppendLine($"        \"realtime_light_count\": {s.realtimeLightCount},");
+            sb.AppendLine($"        \"shadow_caster_count\": {s.shadowCasterCount},");
+            sb.AppendLine($"        \"reflection_probe_count\": {s.reflectionProbeCount},");
+            sb.AppendLine($"        \"material_count\": {s.materialCount},");
+            sb.AppendLine($"        \"unique_material_count\": {s.uniqueMaterialCount},");
+            sb.AppendLine($"        \"transparent_material_count\": {s.transparentMaterialCount},");
+            sb.AppendLine($"        \"post_process_volume_count\": {s.postProcessVolumeCount},");
+            sb.AppendLine($"        \"render_texture_count\": {s.renderTextureCount},");
+            sb.AppendLine($"        \"rigidbody_count\": {s.rigidbodyCount},");
+            sb.AppendLine($"        \"collider_count\": {s.colliderCount}");
+            sb.AppendLine("      },");
         }
 
         private void AppendDeviceInfo(StringBuilder sb, DeviceInfo info)
@@ -587,9 +617,78 @@ namespace XRDataCollector.Network
 
     internal class UploaderHost : MonoBehaviour
     {
+        private static UploaderHost instance;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetDomainState()
+        {
+            instance = null;
+        }
+
+        public static UploaderHost EnsureInstance()
+        {
+            if (instance != null)
+                return instance;
+
+            var go = new GameObject("XRTestUploaderHost");
+            instance = go.AddComponent<UploaderHost>();
+            return instance;
+        }
+
+        public static void DestroyInstance()
+        {
+            if (instance == null)
+                return;
+
+            var target = instance.gameObject;
+            instance = null;
+            if (target != null)
+                Destroy(target);
+        }
+
         private void Awake()
         {
+            if (instance != null && instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
+            instance = this;
+#if !UNITY_EDITOR
             DontDestroyOnLoad(gameObject);
+#endif
+            hideFlags = HideFlags.DontSave;
+
         }
+
+        private void OnApplicationQuit()
+        {
+            DestroyInstance();
+        }
+
+        private void OnDestroy()
+        {
+            if (instance == this)
+                instance = null;
+        }
+
+#if UNITY_EDITOR
+        [UnityEditor.InitializeOnLoadMethod]
+        private static void RegisterPlayModeCleanup()
+        {
+            UnityEditor.EditorApplication.playModeStateChanged -= OnEditorPlayModeStateChanged;
+            UnityEditor.EditorApplication.playModeStateChanged += OnEditorPlayModeStateChanged;
+        }
+
+        private static void OnEditorPlayModeStateChanged(UnityEditor.PlayModeStateChange state)
+        {
+            if (state != UnityEditor.PlayModeStateChange.ExitingPlayMode)
+                return;
+
+            // 延迟到下一帧销毁，避免与 UnityWebRequest 回调在同一销毁栈上触发崩溃。
+            UnityEditor.EditorApplication.delayCall += DestroyInstance;
+        }
+#endif
     }
 }

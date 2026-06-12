@@ -133,7 +133,7 @@ async def stop_unity_test_task(
 @router.get("/test-tasks/{task_id}/logs")
 async def get_unity_test_task_logs(
     task_id: int,
-    tail_lines: int = Query(220, ge=20, le=1000),
+    tail_lines: int = Query(400, ge=20, le=1000),
     current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
     db: Session = Depends(get_db),
 ):

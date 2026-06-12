@@ -36,14 +36,6 @@ namespace XRDataCollector.Collectors
         public void StartCollecting()
         {
             ResetMetrics();
-            if (config == null || config.testLightingQuality)
-                CollectLightingMetrics();
-            if (config == null || config.testMaterialQuality)
-                CollectMaterialMetrics();
-            if (config == null || config.testPostProcessingQuality)
-                CollectPostProcessingMetrics();
-            if (config == null || config.testPhysicsQuality)
-                CollectPhysicsMetrics();
         }
 
         public void StopCollecting()
@@ -52,6 +44,16 @@ namespace XRDataCollector.Collectors
 
         public void Collect(ref PerformanceSample sample)
         {
+            ResetMetrics();
+            if (config == null || config.testLightingQuality)
+                CollectLightingMetrics();
+            if (config == null || config.testMaterialQuality)
+                CollectMaterialMetrics();
+            if (config == null || config.testPostProcessingQuality)
+                CollectPostProcessingMetrics();
+            if (config == null || config.testPhysicsQuality)
+                CollectPhysicsMetrics();
+
             sample.activeLightCount = activeLightCount;
             sample.realtimeLightCount = realtimeLightCount;
             sample.shadowCasterCount = shadowCasterCount;
@@ -67,17 +69,17 @@ namespace XRDataCollector.Collectors
 
         private void ResetMetrics()
         {
-            activeLightCount = IsLightingEnabled() ? 0 : -1;
-            realtimeLightCount = IsLightingEnabled() ? 0 : -1;
-            shadowCasterCount = IsLightingEnabled() ? 0 : -1;
-            reflectionProbeCount = IsLightingEnabled() ? 0 : -1;
-            materialCount = IsMaterialEnabled() ? 0 : -1;
-            uniqueMaterialCount = IsMaterialEnabled() ? 0 : -1;
-            transparentMaterialCount = IsMaterialEnabled() ? 0 : -1;
-            postProcessVolumeCount = IsPostProcessingEnabled() ? 0 : -1;
-            renderTextureCount = IsPostProcessingEnabled() ? 0 : -1;
-            rigidbodyCount = IsPhysicsEnabled() ? 0 : -1;
-            colliderCount = IsPhysicsEnabled() ? 0 : -1;
+            activeLightCount = IsLightingMetricEnabled(config?.testLightingActiveLights ?? true) ? 0 : -1;
+            realtimeLightCount = IsLightingMetricEnabled(config?.testLightingRealtimeLights ?? true) ? 0 : -1;
+            shadowCasterCount = IsLightingMetricEnabled(config?.testLightingShadowCasters ?? true) ? 0 : -1;
+            reflectionProbeCount = IsLightingMetricEnabled(config?.testLightingReflectionProbes ?? true) ? 0 : -1;
+            materialCount = IsMaterialMetricEnabled(config?.testMaterialSlots ?? true) ? 0 : -1;
+            uniqueMaterialCount = IsMaterialMetricEnabled(config?.testMaterialUniqueMaterials ?? true) ? 0 : -1;
+            transparentMaterialCount = IsMaterialMetricEnabled(config?.testMaterialTransparentMaterials ?? true) ? 0 : -1;
+            postProcessVolumeCount = IsPostProcessingMetricEnabled(config?.testPostProcessVolumes ?? true) ? 0 : -1;
+            renderTextureCount = IsPostProcessingMetricEnabled(config?.testPostProcessRenderTextures ?? true) ? 0 : -1;
+            rigidbodyCount = IsPhysicsMetricEnabled(config?.testPhysicsRigidbodies ?? true) ? 0 : -1;
+            colliderCount = IsPhysicsMetricEnabled(config?.testPhysicsColliders ?? true) ? 0 : -1;
         }
 
         private bool IsLightingEnabled()
@@ -100,35 +102,58 @@ namespace XRDataCollector.Collectors
             return config == null || config.testPhysicsQuality;
         }
 
+        private bool IsLightingMetricEnabled(bool metricEnabled)
+        {
+            return IsLightingEnabled() && metricEnabled;
+        }
+
+        private bool IsMaterialMetricEnabled(bool metricEnabled)
+        {
+            return IsMaterialEnabled() && metricEnabled;
+        }
+
+        private bool IsPostProcessingMetricEnabled(bool metricEnabled)
+        {
+            return IsPostProcessingEnabled() && metricEnabled;
+        }
+
+        private bool IsPhysicsMetricEnabled(bool metricEnabled)
+        {
+            return IsPhysicsEnabled() && metricEnabled;
+        }
+
         private void CollectLightingMetrics()
         {
             var lights = UnityEngine.Object.FindObjectsOfType<Light>();
-            activeLightCount = 0;
-            realtimeLightCount = 0;
+            bool collectActiveLights = IsLightingMetricEnabled(config?.testLightingActiveLights ?? true);
+            bool collectRealtimeLights = IsLightingMetricEnabled(config?.testLightingRealtimeLights ?? true);
 
             foreach (var light in lights)
             {
                 if (light == null || !light.isActiveAndEnabled) continue;
 
-                activeLightCount++;
-                if (light.lightmapBakeType == LightmapBakeType.Realtime)
+                if (collectActiveLights) activeLightCount++;
+                if (collectRealtimeLights && light.lightmapBakeType == LightmapBakeType.Realtime)
                 {
                     realtimeLightCount++;
                 }
             }
 
-            shadowCasterCount = 0;
-            var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
-            foreach (var renderer in renderers)
+            if (IsLightingMetricEnabled(config?.testLightingShadowCasters ?? true))
             {
-                if (renderer == null || !renderer.enabled) continue;
-                if (renderer.shadowCastingMode != ShadowCastingMode.Off)
+                var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
+                foreach (var renderer in renderers)
                 {
-                    shadowCasterCount++;
+                    if (renderer == null || !renderer.enabled) continue;
+                    if (renderer.shadowCastingMode != ShadowCastingMode.Off)
+                    {
+                        shadowCasterCount++;
+                    }
                 }
             }
 
-            reflectionProbeCount = UnityEngine.Object.FindObjectsOfType<ReflectionProbe>().Length;
+            if (IsLightingMetricEnabled(config?.testLightingReflectionProbes ?? true))
+                reflectionProbeCount = UnityEngine.Object.FindObjectsOfType<ReflectionProbe>().Length;
         }
 
         private void CollectMaterialMetrics()
@@ -146,17 +171,21 @@ namespace XRDataCollector.Collectors
                 {
                     if (material == null) continue;
 
-                    materialCount++;
-                    uniqueMaterials.Add(material.GetInstanceID());
+                    if (IsMaterialMetricEnabled(config?.testMaterialSlots ?? true))
+                        materialCount++;
+                    if (IsMaterialMetricEnabled(config?.testMaterialUniqueMaterials ?? true))
+                        uniqueMaterials.Add(material.GetInstanceID());
 
-                    if (material.renderQueue >= 3000 || IsTransparentShader(material))
+                    if (IsMaterialMetricEnabled(config?.testMaterialTransparentMaterials ?? true) &&
+                        (material.renderQueue >= 3000 || IsTransparentShader(material)))
                     {
                         transparentMaterialCount++;
                     }
                 }
             }
 
-            uniqueMaterialCount = uniqueMaterials.Count;
+            if (IsMaterialMetricEnabled(config?.testMaterialUniqueMaterials ?? true))
+                uniqueMaterialCount = uniqueMaterials.Count;
         }
 
         private bool IsTransparentShader(Material material)
@@ -171,23 +200,23 @@ namespace XRDataCollector.Collectors
 
         private void CollectPostProcessingMetrics()
         {
-            var volumeType = Type.GetType("UnityEngine.Rendering.Volume, Unity.RenderPipelines.Core.Runtime");
-            if (volumeType != null)
+            if (IsPostProcessingMetricEnabled(config?.testPostProcessVolumes ?? true))
             {
-                var volumes = UnityEngine.Object.FindObjectsOfType(volumeType);
-                postProcessVolumeCount = volumes.Length;
+                var volumeType = Type.GetType("UnityEngine.Rendering.Volume, Unity.RenderPipelines.Core.Runtime");
+                postProcessVolumeCount = volumeType != null
+                    ? UnityEngine.Object.FindObjectsOfType(volumeType).Length
+                    : 0;
             }
-            else
-            {
-                postProcessVolumeCount = 0;
-            }
-            renderTextureCount = Resources.FindObjectsOfTypeAll<RenderTexture>().Length;
+            if (IsPostProcessingMetricEnabled(config?.testPostProcessRenderTextures ?? true))
+                renderTextureCount = Resources.FindObjectsOfTypeAll<RenderTexture>().Length;
         }
 
         private void CollectPhysicsMetrics()
         {
-            rigidbodyCount = UnityEngine.Object.FindObjectsOfType<Rigidbody>().Length;
-            colliderCount = UnityEngine.Object.FindObjectsOfType<Collider>().Length;
+            if (IsPhysicsMetricEnabled(config?.testPhysicsRigidbodies ?? true))
+                rigidbodyCount = UnityEngine.Object.FindObjectsOfType<Rigidbody>().Length;
+            if (IsPhysicsMetricEnabled(config?.testPhysicsColliders ?? true))
+                colliderCount = UnityEngine.Object.FindObjectsOfType<Collider>().Length;
         }
     }
 }

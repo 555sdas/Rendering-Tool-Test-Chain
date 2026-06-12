@@ -10,12 +10,94 @@ namespace XRDataCollector.Editor
     public static class XRBatchTestRunner
     {
         private const string TaskConfigArg = "-xrTaskConfig";
+        private const string QuitOnCompleteKey = "XRDataCollector.BatchQuitOnComplete";
+        private const string PendingExitCodeKey = "XRDataCollector.BatchPendingExitCode";
+        private const string PendingTaskRelativePath = "Library/XRDataCollector/pending-task.json";
+        private const string PendingTaskConfigKey = "XRDataCollector.PendingTaskConfigJson";
+        private const string PendingExitReadyAtKey = "XRDataCollector.BatchPendingExitReadyAt";
+        private const string PendingCollectionReadyAtKey = "XRDataCollector.BatchPendingCollectionReadyAt";
+        private const double ExitDelayAfterUploadSeconds = 3.5d;
+        private const double ExitDelayAfterPlayModeExitSeconds = 2.5d;
         private static XRBatchTaskConfig taskConfig;
-        private static bool exitAfterUpload;
+        private static bool shutdownScheduled;
+
+        [InitializeOnLoadMethod]
+        private static void ResumePendingExit()
+        {
+            EditorApplication.update -= ExitWhenEditorReady;
+            EditorApplication.update -= PollPendingTask;
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            EditorApplication.playModeStateChanged -= OnGlobalPlayModeStateChanged;
+            EditorApplication.update -= PollStopRequestOnUpdate;
+            EditorApplication.update += PollPendingTask;
+            EditorApplication.playModeStateChanged += OnGlobalPlayModeStateChanged;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            if (!string.IsNullOrEmpty(SessionState.GetString(PendingTaskConfigKey, string.Empty)))
+            {
+                EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+                if (EditorApplication.isPlaying)
+                {
+                    var activeManager = XRTestManager.Instance != null
+                        ? XRTestManager.Instance
+                        : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+                    if (activeManager != null && activeManager.IsCollecting)
+                        EditorApplication.update += ReapplyConfigWhileCollectingOnce;
+                    else
+                    {
+                        SessionState.SetString(
+                            PendingCollectionReadyAtKey,
+                            (EditorApplication.timeSinceStartup + 2.0d).ToString("R"));
+                        EditorApplication.update += StartPendingCollectionWhenReady;
+                    }
+                }
+            }
+            if (SessionState.GetInt(PendingExitCodeKey, -1) >= 0)
+                EditorApplication.update += ExitWhenEditorReady;
+            if (!string.IsNullOrEmpty(SessionState.GetString(PendingTaskConfigKey, string.Empty)))
+                EditorApplication.update += PollStopRequestOnUpdate;
+        }
+
+        private static void PollStopRequestOnUpdate()
+        {
+            if (string.IsNullOrEmpty(SessionState.GetString(PendingTaskConfigKey, string.Empty)))
+            {
+                EditorApplication.update -= PollStopRequestOnUpdate;
+                return;
+            }
+
+            PollStopRequest();
+        }
+
+        private static void OnGlobalPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state != PlayModeStateChange.ExitingPlayMode)
+                return;
+
+            taskConfig = null;
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            SessionState.EraseString(PendingCollectionReadyAtKey);
+            if (SessionState.GetInt(PendingExitCodeKey, -1) >= 0)
+            {
+                SessionState.SetString(
+                    PendingExitReadyAtKey,
+                    (EditorApplication.timeSinceStartup + ExitDelayAfterPlayModeExitSeconds).ToString("R"));
+                ScheduleEditorExitPolling();
+            }
+            else if (!SessionState.GetBool(QuitOnCompleteKey, false))
+            {
+                SessionState.EraseString(PendingTaskConfigKey);
+            }
+        }
 
         public static void RunFromCommandLine()
         {
             string configPath = GetArgumentValue(TaskConfigArg);
+            RunFromConfigPath(configPath);
+        }
+
+        public static void RunFromConfigPath(string configPath)
+        {
             if (string.IsNullOrEmpty(configPath))
                 throw new InvalidOperationException("缺少 -xrTaskConfig 参数。");
             if (!File.Exists(configPath))
@@ -26,22 +108,195 @@ namespace XRDataCollector.Editor
             if (taskConfig == null)
                 throw new InvalidOperationException("任务配置解析失败。");
 
+            SessionState.SetString(PendingTaskConfigKey, json);
+            EnableFrameTimingStats();
+
             Debug.Log($"[XRBatchTestRunner] 已读取任务配置：{configPath}");
             Debug.Log($"[XRBatchTestRunner] 任务 {taskConfig.taskId} / 平台会话 {taskConfig.platformSessionId}，项目 {taskConfig.projectId}，场景 {taskConfig.unityScenePath}");
 
-            exitAfterUpload = taskConfig.quitOnComplete;
+            SessionState.SetBool(QuitOnCompleteKey, taskConfig.quitOnComplete);
+            SessionState.SetInt(PendingExitCodeKey, -1);
+            SessionState.EraseString(PendingExitReadyAtKey);
+            SessionState.EraseString(PendingCollectionReadyAtKey);
+            shutdownScheduled = false;
             OpenConfiguredScene(taskConfig);
             var manager = EnsureManager();
             ApplyTaskConfig(manager, taskConfig);
 
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            EditorApplication.update -= PollStopRequestOnUpdate;
+            EditorApplication.update += PollStopRequestOnUpdate;
             EditorApplication.isPlaying = true;
+        }
+
+        private static void PollPendingTask()
+        {
+            if (EditorApplication.isCompiling || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                PollStopRequest();
+                return;
+            }
+
+            string inboxPath = Path.GetFullPath(PendingTaskRelativePath);
+            if (!File.Exists(inboxPath)) return;
+            try
+            {
+                var request = JsonUtility.FromJson<PendingTaskRequest>(File.ReadAllText(inboxPath));
+                File.Delete(inboxPath);
+                if (request == null || string.IsNullOrEmpty(request.configPath))
+                    throw new InvalidOperationException("待执行任务没有 configPath。");
+                RunFromConfigPath(request.configPath);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError("[XRBatchTestRunner] 读取待执行任务失败：" + exception);
+            }
+        }
+
+        private static void PollStopRequest()
+        {
+            int taskId = ResolveStopTaskId();
+            if (taskId <= 0) return;
+
+            string path = Path.GetFullPath($"Library/XRDataCollector/stop-task-{taskId}");
+            if (!File.Exists(path)) return;
+            File.Delete(path);
+
+            EnsureTaskConfigLoaded();
+            Debug.Log($"[XRBatchTestRunner] 收到网页停止请求，任务 {taskId}。");
+
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            SessionState.EraseString(PendingCollectionReadyAtKey);
+
+            var manager = XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+            if (manager != null)
+            {
+                manager.OnDataUploaded -= OnDataUploaded;
+                manager.OnSessionStopped -= OnSessionStopped;
+                if (manager.IsCollecting)
+                    manager.StopCollection();
+                else
+                    manager.PrepareForShutdown();
+            }
+
+            Finish(0);
+        }
+
+        private static void EnsureTaskConfigLoaded()
+        {
+            if (taskConfig != null) return;
+
+            string json = SessionState.GetString(PendingTaskConfigKey, string.Empty);
+            if (string.IsNullOrEmpty(json)) return;
+
+            taskConfig = JsonUtility.FromJson<XRBatchTaskConfig>(json);
+        }
+
+        private static int ResolveStopTaskId()
+        {
+            EnsureTaskConfigLoaded();
+            if (taskConfig != null && taskConfig.taskId > 0)
+                return taskConfig.taskId;
+
+            string configJson = SessionState.GetString(PendingTaskConfigKey, string.Empty);
+            if (!string.IsNullOrEmpty(configJson))
+            {
+                var cached = JsonUtility.FromJson<XRBatchTaskConfig>(configJson);
+                if (cached != null && cached.taskId > 0)
+                    return cached.taskId;
+            }
+
+            string stopDir = Path.GetFullPath("Library/XRDataCollector");
+            if (!Directory.Exists(stopDir)) return 0;
+
+            foreach (string file in Directory.GetFiles(stopDir, "stop-task-*"))
+            {
+                string name = Path.GetFileName(file);
+                const string prefix = "stop-task-";
+                if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                if (int.TryParse(name.Substring(prefix.Length), out int taskId))
+                    return taskId;
+            }
+
+            return 0;
         }
 
         private static void OnPlayModeStateChanged(PlayModeStateChange state)
         {
             if (state != PlayModeStateChange.EnteredPlayMode) return;
+
+            SchedulePendingCollection();
+            RequestFlythroughIfConfigured();
+        }
+
+        private static void ReapplyConfigWhileCollectingOnce()
+        {
+            if (!EditorApplication.isPlaying)
+            {
+                EditorApplication.update -= ReapplyConfigWhileCollectingOnce;
+                return;
+            }
+
+            var manager = XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+            if (manager == null || !manager.IsCollecting)
+            {
+                EditorApplication.update -= ReapplyConfigWhileCollectingOnce;
+                return;
+            }
+
+            EditorApplication.update -= ReapplyConfigWhileCollectingOnce;
+            EnsureTaskConfigApplied(manager);
+            manager.EnsureCollectorsActiveAfterReload();
+            RequestFlythroughIfConfigured();
+            Debug.Log("[XRBatchTestRunner] 脚本重载后已恢复进行中的采集任务。");
+        }
+
+        private static void RequestFlythroughIfConfigured()
+        {
+            if (taskConfig != null)
+            {
+                if (!taskConfig.forceAutoFlythroughOnStart)
+                    return;
+            }
+            else
+            {
+                string cachedJson = SessionState.GetString(PendingTaskConfigKey, string.Empty);
+                if (string.IsNullOrEmpty(cachedJson))
+                    return;
+                var cached = JsonUtility.FromJson<XRBatchTaskConfig>(cachedJson);
+                if (cached == null || !cached.forceAutoFlythroughOnStart)
+                    return;
+            }
+
+            var manager = XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+            TestSceneFlythroughActivator.RequestActivation(manager);
+        }
+
+        private static void SchedulePendingCollection()
+        {
+            SessionState.SetString(
+                PendingCollectionReadyAtKey,
+                (EditorApplication.timeSinceStartup + 2.0d).ToString("R"));
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            EditorApplication.update += StartPendingCollectionWhenReady;
+            Debug.Log("[XRBatchTestRunner] Play Mode 已进入，等待 Editor 稳定后启动采集。");
+        }
+
+        private static void StartPendingCollectionWhenReady()
+        {
+            if (!EditorApplication.isPlaying || EditorApplication.isCompiling || EditorApplication.isUpdating)
+                return;
+
+            if (double.TryParse(SessionState.GetString(PendingCollectionReadyAtKey, "0"), out double readyAt) &&
+                EditorApplication.timeSinceStartup < readyAt)
+                return;
 
             var manager = XRTestManager.Instance != null
                 ? XRTestManager.Instance
@@ -53,13 +308,26 @@ namespace XRDataCollector.Editor
                 return;
             }
 
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            SessionState.EraseString(PendingCollectionReadyAtKey);
+
+            if (manager.IsCollecting)
+            {
+                EnsureTaskConfigApplied(manager);
+                manager.EnsureCollectorsActiveAfterReload();
+                Debug.Log("[XRBatchTestRunner] 采集已在运行，已重新应用配置并恢复采集器。");
+                return;
+            }
+
+            EnsureTaskConfigApplied(manager);
+
             manager.OnDataUploaded -= OnDataUploaded;
             manager.OnDataUploaded += OnDataUploaded;
             manager.OnSessionStopped -= OnSessionStopped;
             manager.OnSessionStopped += OnSessionStopped;
 
-            if (!manager.IsCollecting)
-                manager.StartCollection();
+            manager.StartCollection();
+            Debug.Log("[XRBatchTestRunner] Editor 已稳定，冷启动采集已开始。");
         }
 
         private static void OnSessionStopped()
@@ -78,15 +346,88 @@ namespace XRDataCollector.Editor
 
         private static void Finish(int exitCode)
         {
-            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            if (shutdownScheduled)
+                return;
+            shutdownScheduled = true;
 
-            if (!exitAfterUpload)
+            DetachManagerCallbacks();
+
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            EditorApplication.update -= StartPendingCollectionWhenReady;
+            EditorApplication.update -= PollStopRequestOnUpdate;
+            SessionState.EraseString(PendingCollectionReadyAtKey);
+            taskConfig = null;
+
+            var manager = XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+            manager?.PrepareForShutdown();
+
+            bool quitEditor = SessionState.GetBool(QuitOnCompleteKey, false);
+            SchedulePlayModeExit();
+
+            if (!quitEditor)
+            {
+                SessionState.EraseString(PendingTaskConfigKey);
+                SessionState.EraseBool(QuitOnCompleteKey);
+                Debug.Log("[XRBatchTestRunner] 测试结束，已安排退出 Play Mode，保持 Unity Editor 打开。");
+                return;
+            }
+
+            SessionState.SetInt(PendingExitCodeKey, exitCode);
+            SessionState.SetString(
+                PendingExitReadyAtKey,
+                (EditorApplication.timeSinceStartup + ExitDelayAfterUploadSeconds).ToString("R"));
+            ScheduleEditorExitPolling();
+            Debug.Log($"[XRBatchTestRunner] 已安排 Editor 退出（exitCode={exitCode}），先等待运行时资源释放。");
+        }
+
+        private static void SchedulePlayModeExit()
+        {
+            EditorApplication.delayCall += () =>
+            {
+                if (EditorApplication.isPlaying)
+                    EditorApplication.isPlaying = false;
+            };
+        }
+
+        private static void DetachManagerCallbacks()
+        {
+            var manager = XRTestManager.Instance != null
+                ? XRTestManager.Instance
+                : UnityEngine.Object.FindObjectOfType<XRTestManager>();
+            if (manager == null)
                 return;
 
-            if (EditorApplication.isPlaying)
-                EditorApplication.isPlaying = false;
+            manager.OnDataUploaded -= OnDataUploaded;
+            manager.OnSessionStopped -= OnSessionStopped;
+        }
 
-            EditorApplication.delayCall += () => EditorApplication.Exit(exitCode);
+        private static void ScheduleEditorExitPolling()
+        {
+            EditorApplication.update -= ExitWhenEditorReady;
+            EditorApplication.update += ExitWhenEditorReady;
+        }
+
+        private static void ExitWhenEditorReady()
+        {
+            int exitCode = SessionState.GetInt(PendingExitCodeKey, -1);
+            if (exitCode < 0 || EditorApplication.isPlayingOrWillChangePlaymode ||
+                EditorApplication.isCompiling || EditorApplication.isUpdating)
+                return;
+
+            if (double.TryParse(SessionState.GetString(PendingExitReadyAtKey, "0"), out double readyAt) &&
+                EditorApplication.timeSinceStartup < readyAt)
+                return;
+
+            EditorApplication.update -= ExitWhenEditorReady;
+            SessionState.EraseInt(PendingExitCodeKey);
+            SessionState.EraseBool(QuitOnCompleteKey);
+            SessionState.EraseString(PendingTaskConfigKey);
+            SessionState.EraseString(PendingExitReadyAtKey);
+            shutdownScheduled = false;
+            Debug.Log($"[XRBatchTestRunner] Editor 即将退出，exitCode={exitCode}。");
+            EditorApplication.Exit(exitCode);
         }
 
         private static void FinishWithError(string message)
@@ -98,19 +439,27 @@ namespace XRDataCollector.Editor
         private static void OpenConfiguredScene(XRBatchTaskConfig config)
         {
             if (string.IsNullOrEmpty(config.unityScenePath)) return;
-            string scenePath = config.unityScenePath.Replace("\\", "/");
-            if (!File.Exists(scenePath))
+            string assetPath = config.unityScenePath.Replace("\\", "/");
+            string projectPath = string.IsNullOrEmpty(config.unityProjectPath)
+                ? Directory.GetCurrentDirectory()
+                : config.unityProjectPath;
+            if (Path.IsPathRooted(assetPath))
             {
-                string projectPath = string.IsNullOrEmpty(config.unityProjectPath)
-                    ? Directory.GetCurrentDirectory()
-                    : config.unityProjectPath;
-                scenePath = Path.Combine(projectPath, scenePath).Replace("\\", "/");
+                string assetsRoot = Path.Combine(projectPath, "Assets").Replace("\\", "/").TrimEnd('/');
+                if (!assetPath.StartsWith(assetsRoot + "/", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("场景不在当前 Unity 项目的 Assets 目录中：" + assetPath);
+                assetPath = "Assets/" + assetPath.Substring(assetsRoot.Length + 1);
             }
-            if (!File.Exists(scenePath))
-                throw new FileNotFoundException("Unity 场景文件不存在。", scenePath);
+            string absolutePath = Path.Combine(projectPath, assetPath).Replace("\\", "/");
+            if (!File.Exists(absolutePath))
+                throw new FileNotFoundException("Unity 场景文件不存在。", absolutePath);
 
-            EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
-            Debug.Log($"[XRBatchTestRunner] 场景已打开：{scenePath}");
+            var openedScene = EditorSceneManager.OpenScene(assetPath, OpenSceneMode.Single);
+            if (!openedScene.IsValid() || openedScene.path != assetPath)
+                throw new InvalidOperationException($"场景打开结果不正确，期望 {assetPath}，实际 {openedScene.path}");
+            Debug.Log($"[XRBatchTestRunner] 场景已打开并设为活动场景：{openedScene.path}");
+            if (UnityEngine.Object.FindObjectOfType<Camera>() == null)
+                Debug.LogWarning($"[XRBatchTestRunner] 场景 {openedScene.path} 中没有启用的 Camera，Game 窗口将显示 No cameras rendering。");
         }
 
         private static XRTestManager EnsureManager()
@@ -122,6 +471,38 @@ namespace XRDataCollector.Editor
             manager = go.AddComponent<XRTestManager>();
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
             return manager;
+        }
+
+        private static void EnableFrameTimingStats()
+        {
+            try
+            {
+                PlayerSettings.enableFrameTimingStats = true;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[XRBatchTestRunner] 无法启用 Frame Timing Stats：" + exception.Message);
+            }
+        }
+
+        private static void EnsureTaskConfigApplied(XRTestManager manager)
+        {
+            if (taskConfig == null)
+            {
+                string cachedJson = SessionState.GetString(PendingTaskConfigKey, string.Empty);
+                if (!string.IsNullOrEmpty(cachedJson))
+                    taskConfig = JsonUtility.FromJson<XRBatchTaskConfig>(cachedJson);
+            }
+
+            if (taskConfig == null)
+            {
+                Debug.LogWarning("[XRBatchTestRunner] 进入 Play Mode 时未找到任务配置，将使用场景内已有配置。");
+                return;
+            }
+
+            ApplyTaskConfig(manager, taskConfig);
+            manager.Initialize(manager.Config);
+            Debug.Log("[XRBatchTestRunner] 已在 Play Mode 重新应用网页任务配置。");
         }
 
         private static void ApplyTaskConfig(XRTestManager manager, XRBatchTaskConfig task)
@@ -139,6 +520,7 @@ namespace XRDataCollector.Editor
             config.collectDeviceInfo = task.collectDeviceInfo;
             config.platformBaseUrl = task.platformBaseUrl;
             config.uploadUrl = task.uploadUrl;
+            config.progressUrl = task.progressUrl;
             config.projectId = task.projectId;
             config.projectName = task.projectName;
             config.sceneId = task.sceneId;
@@ -149,6 +531,7 @@ namespace XRDataCollector.Editor
             config.autoCreateSession = task.autoCreateSession;
             config.autoStart = task.autoStart;
             config.quitOnComplete = task.quitOnComplete;
+            config.forceAutoFlythroughOnStart = task.forceAutoFlythroughOnStart;
 
             if (task.qualityChecks != null)
             {
@@ -214,6 +597,7 @@ namespace XRDataCollector.Editor
             public string projectName;
             public string platformBaseUrl;
             public string uploadUrl;
+            public string progressUrl;
             public string deviceToken;
             public string unityProjectPath;
             public string unityScenePath;
@@ -230,8 +614,15 @@ namespace XRDataCollector.Editor
             public bool autoCreateSession;
             public bool autoStart;
             public bool quitOnComplete;
+            public bool forceAutoFlythroughOnStart = true;
             public XRBatchQualityChecks qualityChecks;
             public XRBatchQualityMetricChecks qualityMetricChecks;
+        }
+
+        [Serializable]
+        private class PendingTaskRequest
+        {
+            public string configPath;
         }
 
         [Serializable]

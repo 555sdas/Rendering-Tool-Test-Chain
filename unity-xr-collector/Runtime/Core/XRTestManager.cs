@@ -14,6 +14,11 @@ namespace XRDataCollector.Core
 
         public static XRTestManager Instance { get; private set; }
 
+        internal static void ResetDomainState()
+        {
+            Instance = null;
+        }
+
         #endregion
 
         #region Events
@@ -45,6 +50,7 @@ namespace XRDataCollector.Core
         private XRTestSession session;
         private List<IPerformanceCollector> allCollectors;
         private List<IPerformanceCollector> batchCollectors;
+        private List<IPerformanceCollector> liveCollectors;
         private List<PerformanceSample> samples;
         private float collectTimer;
         private bool isCollecting;
@@ -53,6 +59,7 @@ namespace XRDataCollector.Core
 
         private FrameRateCollector frameRateCollector;
         private FrameTimeCollector frameTimeCollector;
+        private RenderingStatsCollector renderingStatsCollector;
         private float cachedFrameRate;
         private float cachedFrameTimeMs;
         private int lastBatchFrameCount;
@@ -137,13 +144,35 @@ namespace XRDataCollector.Core
                 return;
             }
             Instance = this;
+#if !UNITY_EDITOR
             DontDestroyOnLoad(gameObject);
+#endif
             EnsureRuntimeState();
         }
+
+#if UNITY_EDITOR
+        private void OnEnable()
+        {
+            if (!isCollecting)
+                return;
+            if (string.IsNullOrEmpty(UnityEditor.SessionState.GetString("XRDataCollector.PendingTaskConfigJson", string.Empty)))
+                return;
+            if (batchCollectors == null || batchCollectors.Count == 0)
+                InitializeCollectors();
+            RestoreCollectorStateForPhase(currentPhase);
+            if (config != null && config.forceAutoFlythroughOnStart)
+                TestSceneFlythroughActivator.RequestActivation(this);
+        }
+#endif
 
         private void Start()
         {
             EnsureRuntimeState();
+#if UNITY_EDITOR
+            // 网页冷启动 / 脚本域重载：采集生命周期由 XRBatchTestRunner 接管，避免 Start 重建采集器导致指标归零。
+            if (!string.IsNullOrEmpty(UnityEditor.SessionState.GetString("XRDataCollector.PendingTaskConfigJson", string.Empty)))
+                return;
+#endif
             InitializeCollectors();
             if (config.autoStart)
                 StartCollection();
@@ -191,7 +220,11 @@ namespace XRDataCollector.Core
 
         private void OnDestroy()
         {
-            if (isCollecting) StopCollection();
+            if (isCollecting)
+                StopCollection(uploadResults: false);
+            else
+                DisposeAllCollectors();
+
             if (Instance == this) Instance = null;
         }
 
@@ -203,7 +236,25 @@ namespace XRDataCollector.Core
         {
             config = newConfig ?? new XRTestConfig();
             EnsureRuntimeState();
+            bool wasCollecting = isCollecting;
+            var phase = currentPhase;
             InitializeCollectors();
+            if (wasCollecting)
+                RestoreCollectorStateForPhase(phase);
+        }
+
+        /// <summary>
+        /// 脚本热重载后恢复采集器，避免 CPU/GPU/内存等指标在首个样本后归零。
+        /// </summary>
+        public void EnsureCollectorsActiveAfterReload()
+        {
+            if (!isCollecting)
+                return;
+
+            RestoreCollectorStateForPhase(currentPhase);
+            if (config.forceAutoFlythroughOnStart)
+                TestSceneFlythroughActivator.RequestActivation(this);
+            Debug.Log($"[XRTestManager] 采集器已恢复，阶段={currentPhase}，batch={batchCollectors.Count}，live={liveCollectors.Count}。");
         }
 
         public void StartCollection()
@@ -211,6 +262,9 @@ namespace XRDataCollector.Core
             EnsureRuntimeState();
             if (allCollectors.Count == 0) InitializeCollectors();
             if (isCollecting) return;
+
+            if (config.enableNetworkUpload)
+                TestDataUploader.EnsureRuntimeHost();
 
             session = new XRTestSession(config.sessionName);
             session.Start();
@@ -226,14 +280,23 @@ namespace XRDataCollector.Core
             lastBatchFrameCount = Time.frameCount;
             lastBatchRealTime = Time.unscaledTime;
             collectionStartRealTime = Time.unscaledTime;
+            foreach (var collector in liveCollectors)
+                collector.StartCollecting();
             StartFrameRatePhase();
+            EnsureProgressReporter();
+
+            if (config.forceAutoFlythroughOnStart)
+                TestSceneFlythroughActivator.RequestActivation(this);
 
             OnSessionStarted?.Invoke();
             CreatePlatformSessionForCurrentRun();
-            Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已开始。阶段1：前30秒采集帧率。");
+            Debug.Log(
+                $"[XRTestManager] 会话 '{config.sessionName}' 已开始。阶段1时长={config.frameRateDurationSeconds:F1}s，" +
+                $"阶段2时长={config.metricsDurationSeconds:F1}s，间隔={config.collectInterval:F2}s，" +
+                $"CPU={config.collectCpuUsage}, GPU={config.collectGpuUsage}, 内存={config.collectMemory}, 设备={config.collectDeviceInfo}。");
         }
 
-        public void StopCollection()
+        public void StopCollection(bool uploadResults = true)
         {
             if (!isCollecting) return;
             isCollecting = false;
@@ -246,7 +309,7 @@ namespace XRDataCollector.Core
             OnSessionStopped?.Invoke();
             Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已停止。共采集样本数：{samples.Count}");
 
-            if (config.enableNetworkUpload && samples.Count > 0)
+            if (uploadResults && config.enableNetworkUpload && samples.Count > 0)
                 UploadData("", null);
         }
 
@@ -318,9 +381,39 @@ namespace XRDataCollector.Core
 
         public void ClearSamples() => samples.Clear();
 
+        /// <summary>
+        /// 构建用于实时进度上报的当前快照，确保前端展示字段持续更新。
+        /// </summary>
+        public PerformanceSample BuildLiveProgressSample()
+        {
+            var sample = CreateBaseSample(
+                currentPhase == CollectionPhase.FrameRate ? FrameRatePhaseName : MetricsPhaseName);
+
+            sample.frameRate = cachedFrameRate;
+            sample.frameTimeMs = cachedFrameTimeMs;
+            sample.rawFrameTimeMs = cachedFrameTimeMs;
+
+            if (liveCollectors != null)
+            {
+                foreach (var collector in liveCollectors)
+                    collector.Collect(ref sample);
+            }
+
+            return sample;
+        }
+
         #endregion
 
         #region Private Methods
+
+        private void EnsureProgressReporter()
+        {
+            if (string.IsNullOrEmpty(config.progressUrl)) return;
+            var reporter = GetComponent<UnityProgressReporter>();
+            if (reporter == null)
+                reporter = gameObject.AddComponent<UnityProgressReporter>();
+            reporter.Initialize(this);
+        }
 
         private void CreatePlatformSessionForCurrentRun()
         {
@@ -358,34 +451,46 @@ namespace XRDataCollector.Core
 
         private void NotifyDataUploaded(bool success)
         {
+            PrepareForShutdown();
             OnDataUploaded?.Invoke(success);
-            QuitAfterCommandLineRun(success);
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.delayCall += () => Network.TestDataUploader.DestroyInstance();
+#endif
         }
 
-        private void QuitAfterCommandLineRun(bool success)
+        /// <summary>
+        /// 上传完成后的清理：停止实时上报与巡航，降低退出 Play Mode / Editor 时崩溃概率。
+        /// </summary>
+        public void PrepareForShutdown()
         {
-            if (config == null || !config.quitOnComplete) return;
+            enabled = false;
 
-#if UNITY_EDITOR
-            UnityEditor.EditorApplication.delayCall += () =>
-            {
-                if (UnityEditor.EditorApplication.isPlaying)
-                    UnityEditor.EditorApplication.isPlaying = false;
-                UnityEditor.EditorApplication.Exit(success ? 0 : 1);
-            };
-#else
-            Application.Quit(success ? 0 : 1);
-#endif
+            var reporter = GetComponent<UnityProgressReporter>();
+            if (reporter != null)
+                reporter.enabled = false;
+
+            TestSceneFlythroughActivator.StopPresentation();
+        }
+
+        private void DisposeAllCollectors()
+        {
+            if (allCollectors == null)
+                return;
+
+            foreach (var collector in allCollectors)
+                collector.StopCollecting();
         }
 
         private void InitializeCollectors()
         {
             EnsureRuntimeState();
+            DisposeAllCollectors();
             allCollectors.Clear();
             batchCollectors.Clear();
 
             frameRateCollector = new FrameRateCollector();
             frameTimeCollector = new FrameTimeCollector();
+            renderingStatsCollector = new RenderingStatsCollector();
             var cpuCollector = new CpuUsageCollector();
             var gpuCollector = new GpuUsageCollector();
             var memoryCollector = new MemoryCollector();
@@ -404,6 +509,7 @@ namespace XRDataCollector.Core
                 allCollectors.Add(memoryCollector);
             if (config.collectDeviceInfo)
                 allCollectors.Add(deviceCollector);
+            allCollectors.Add(renderingStatsCollector);
             allCollectors.Add(renderQualityCollector);
 
             if (config.collectCpuUsage)
@@ -414,7 +520,22 @@ namespace XRDataCollector.Core
                 batchCollectors.Add(memoryCollector);
             if (config.collectDeviceInfo)
                 batchCollectors.Add(deviceCollector);
+            batchCollectors.Add(renderingStatsCollector);
             batchCollectors.Add(renderQualityCollector);
+
+            liveCollectors.Clear();
+            if (config.collectCpuUsage)
+                liveCollectors.Add(cpuCollector);
+            if (config.collectGpuUsage)
+                liveCollectors.Add(gpuCollector);
+            if (config.collectMemory)
+                liveCollectors.Add(memoryCollector);
+            if (config.collectDeviceInfo)
+            {
+                liveCollectors.Add(deviceCollector);
+            }
+            liveCollectors.Add(renderingStatsCollector);
+            liveCollectors.Add(renderQualityCollector);
         }
 
         private void Reset() => EnsureRuntimeState();
@@ -426,6 +547,7 @@ namespace XRDataCollector.Core
             config.NormalizeRuntimeSettings();
             if (allCollectors == null) allCollectors = new List<IPerformanceCollector>();
             if (batchCollectors == null) batchCollectors = new List<IPerformanceCollector>();
+            if (liveCollectors == null) liveCollectors = new List<IPerformanceCollector>();
             if (samples == null) samples = new List<PerformanceSample>();
         }
 
@@ -436,14 +558,47 @@ namespace XRDataCollector.Core
                 frameRateCollector?.StartCollecting();
             if (config.collectFrameTime)
                 frameTimeCollector?.StartCollecting();
+            StartBatchMetricCollectors();
+        }
+
+        private void StartBatchMetricCollectors()
+        {
+            foreach (var collector in batchCollectors)
+                collector.StartCollecting();
+        }
+
+        private void RestoreCollectorStateForPhase(CollectionPhase phase)
+        {
+            if (!isCollecting || phase == CollectionPhase.None)
+                return;
+
+            if (phase == CollectionPhase.FrameRate)
+            {
+                if (config.collectFrameRate)
+                    frameRateCollector?.StartCollecting();
+                if (config.collectFrameTime)
+                    frameTimeCollector?.StartCollecting();
+            }
+
+            StartBatchMetricCollectors();
+
+            if (liveCollectors != null)
+            {
+                foreach (var collector in liveCollectors)
+                    collector.StartCollecting();
+            }
+        }
+
+        private void AppendBatchMetrics(ref PerformanceSample sample)
+        {
+            foreach (var collector in batchCollectors)
+                collector.Collect(ref sample);
         }
 
         private void SwitchToMetricsPhase()
         {
             frameRateCollector?.StopCollecting();
             frameTimeCollector?.StopCollecting();
-            foreach (var collector in batchCollectors)
-                collector.StartCollecting();
 
             currentPhase = CollectionPhase.Metrics;
             collectTimer = 0f;
@@ -466,6 +621,25 @@ namespace XRDataCollector.Core
         private void CollectFrameRateSample()
         {
             var sample = CreateBaseSample(FrameRatePhaseName);
+            AppendFrameMetrics(ref sample);
+            AppendBatchMetrics(ref sample);
+            samples.Add(sample);
+            OnSampleCollected?.Invoke(sample);
+            LogSampleSummary(sample);
+        }
+
+        private void CollectMetricsSample()
+        {
+            var sample = CreateBaseSample(MetricsPhaseName);
+            AppendFrameMetrics(ref sample);
+            AppendBatchMetrics(ref sample);
+            samples.Add(sample);
+            OnSampleCollected?.Invoke(sample);
+            LogSampleSummary(sample);
+        }
+
+        private void AppendFrameMetrics(ref PerformanceSample sample)
+        {
             if (config.collectFrameRate)
                 sample.frameRate = cachedFrameRate;
             if (config.collectFrameTime)
@@ -473,17 +647,24 @@ namespace XRDataCollector.Core
                 sample.frameTimeMs = cachedFrameTimeMs;
                 sample.rawFrameTimeMs = cachedFrameTimeMs;
             }
-            samples.Add(sample);
-            OnSampleCollected?.Invoke(sample);
         }
 
-        private void CollectMetricsSample()
+        private void LogSampleSummary(PerformanceSample sample)
         {
-            var sample = CreateBaseSample(MetricsPhaseName);
-            foreach (var collector in batchCollectors)
-                collector.Collect(ref sample);
-            samples.Add(sample);
-            OnSampleCollected?.Invoke(sample);
+            bool verbose = config != null && config.enableNetworkUpload;
+            if (!verbose && samples.Count != 1 && samples.Count % 10 != 0)
+                return;
+            if (verbose && samples.Count != 1 && samples.Count % 5 != 0)
+                return;
+
+            Debug.Log(
+                $"[XRTestManager] 样本 #{samples.Count} ({sample.collectionPhase})：" +
+                $"FPS={sample.frameRate:F1}, 帧时={sample.frameTimeMs:F2}ms, " +
+                $"CPU={sample.cpuUsagePercent:F1}%, GPU={sample.gpuUsagePercent:F1}%, " +
+                $"内存={sample.totalMemoryMB:F1}MB, 托管={sample.managedMemoryMB:F1}MB, 显存={sample.graphicsMemoryMB:F1}MB, " +
+                $"DrawCalls={sample.drawCalls}, Triangles={sample.triangles}, Vertices={sample.vertices}, " +
+                $"光源={sample.activeLightCount}/{sample.realtimeLightCount}, 阴影={sample.shadowCasterCount}, " +
+                $"材质={sample.materialCount}, 设备信息={(sample.deviceInfo != null ? "有" : "无")}。");
         }
 
         #endregion

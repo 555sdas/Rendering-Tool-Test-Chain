@@ -1,0 +1,173 @@
+.render-quality-panel {
+  width: 100%;
+}
+
+.rq-summary-card {
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fafcff 0%, #ffffff 100%);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.rq-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+
+.rq-section-heading .ant-typography {
+  margin: 0;
+}
+
+.rq-category-card {
+  height: 100%;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.rq-category-card .ant-card-body {
+  padding: 20px;
+}
+
+.rq-category-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.rq-category-card__title {
+  margin: 0 0 4px !important;
+}
+
+.rq-category-card__weight {
+  font-size: 12px;
+}
+
+.rq-category-card__body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.rq-category-card__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.rq-category-card__section + .rq-category-card__section {
+  margin-top: 14px;
+}
+
+.rq-category-card__section-title {
+  margin-bottom: 8px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.rq-score-ring {
+  flex-shrink: 0;
+}
+
+.rq-score-ring--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: 6px solid #f0f2f5;
+  border-radius: 50%;
+  color: #8c8c8c;
+  font-size: 13px;
+}
+
+.rq-score-ring__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+}
+
+.rq-score-ring__inner strong {
+  font-size: 22px;
+}
+
+.rq-score-ring__inner span {
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.rq-metric-list,
+.rq-deduction-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rq-metric-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed #f0f0f0;
+}
+
+.rq-metric-list li:last-child {
+  border-bottom: none;
+}
+
+.rq-metric-list__label {
+  color: #475569;
+  font-size: 13px;
+}
+
+.rq-metric-list__value {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rq-deduction-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+.rq-deduction-tag {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.rq-footnote {
+  margin: 16px 0 0;
+  font-size: 12px;
+}
+
+.rq-empty {
+  padding: 40px 0;
+  color: #8c8c8c;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .rq-category-card__body {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .rq-category-card__content {
+    width: 100%;
+  }
+}
