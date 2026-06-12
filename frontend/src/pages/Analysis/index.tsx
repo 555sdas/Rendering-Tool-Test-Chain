@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Row, Col, Statistic, Tabs, Table, Tag, message, Space, Button, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
 import RenderQualityPanel from '@/components/RenderQualityPanel';
@@ -23,17 +23,16 @@ import {
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import { analysisApi, type FullReport } from '@/api/analysis';
 import { reportsApi, saveReportBlob, type ReportFormat } from '@/api/reports';
-import { sessionsApi, type PerformanceSample, type TestSession } from '@/api/sessions';
+import { sessionsApi, type TestSession } from '@/api/sessions';
+import { getSessionSceneLabel } from '@/lib/sessionScene';
+import {
+  buildFrameQualityPieData,
+  buildFrameTimeHistogram,
+  buildSampleChartData,
+  type SampleChartPoint,
+} from '@/lib/sampleCharts';
 
 const { TabPane } = Tabs;
-
-const frameTimeData = [
-  { range: '< 11ms', count: 450 },
-  { range: '11-13ms', count: 280 },
-  { range: '13-16ms', count: 120 },
-  { range: '16-20ms', count: 80 },
-  { range: '> 20ms', count: 45 },
-];
 
 const comparisonData = [
   { metric: '平均FPS', quest3: 72, quest2: 65, pico4: 58 },
@@ -42,13 +41,6 @@ const comparisonData = [
   { metric: '长帧次数', quest3: 12, quest2: 28, pico4: 45 },
   { metric: 'CPU平均(%)', quest3: 52, quest2: 58, pico4: 62 },
   { metric: 'GPU平均(%)', quest3: 68, quest2: 75, pico4: 82 },
-];
-
-const pieData = [
-  { name: '正常帧', value: 850, color: '#10b981' },
-  { name: '轻微掉帧', value: 80, color: '#f59e0b' },
-  { name: '严重掉帧', value: 45, color: '#ef4444' },
-  { name: '长帧', value: 25, color: '#8b5cf6' },
 ];
 
 function buildReportFilename(sessionId: number, sessionName: string | null | undefined, format: ReportFormat) {
@@ -72,7 +64,9 @@ const Analysis: React.FC = () => {
     (projectFilterId ? `/projects/${projectFilterId}` : '/projects');
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
   const [currentSession, setCurrentSession] = useState<TestSession | null>(null);
-  const [sampleChartData, setSampleChartData] = useState<Array<{ time: string; fps: number; cpu: number; gpu: number; memory: number }>>([]);
+  const [sampleChartData, setSampleChartData] = useState<SampleChartPoint[]>([]);
+  const [frameTimeData, setFrameTimeData] = useState<Array<{ range: string; count: number }>>([]);
+  const [pieData, setPieData] = useState<Array<{ name: string; value: number; color: string }>>([]);
   const [exportingReport, setExportingReport] = useState(false);
 
   useEffect(() => {
@@ -80,6 +74,8 @@ const Analysis: React.FC = () => {
       setFullReport(null);
       setCurrentSession(null);
       setSampleChartData([]);
+      setFrameTimeData([]);
+      setPieData([]);
       return;
     }
 
@@ -92,13 +88,9 @@ const Analysis: React.FC = () => {
         ]);
         setFullReport(report);
         setCurrentSession(sessionDetail);
-        setSampleChartData(samples.slice(0, 120).map((sample: PerformanceSample, index) => ({
-          time: `${index}s`,
-          fps: Number(sample.fps || 0),
-          cpu: Number(sample.cpu_usage_percent || 0),
-          gpu: Number(sample.gpu_usage_percent || 0),
-          memory: Number(((sample.memory_mb || 0) / 1024).toFixed(2)),
-        })));
+        setSampleChartData(buildSampleChartData(samples));
+        setFrameTimeData(buildFrameTimeHistogram(samples));
+        setPieData(buildFrameQualityPieData(samples));
       } catch {
         message.warning('未能读取后端分析结果，当前显示内置分析样例');
       }
@@ -108,6 +100,7 @@ const Analysis: React.FC = () => {
 
   const canExportReport = Number.isFinite(sessionId);
   const currentSessionName = currentSession?.name || fullReport?.session_info?.name;
+  const currentSceneLabel = currentSession ? getSessionSceneLabel(currentSession) : null;
 
   const handleExportReport = async (format: ReportFormat) => {
     if (!canExportReport) {
@@ -177,12 +170,22 @@ const Analysis: React.FC = () => {
     },
   ];
 
-  const fpsChartData = sampleChartData.length
-    ? sampleChartData.filter((d) => d.fps > 0).slice(0, 30)
-    : [];
-  const resourceChartData = sampleChartData.length
-    ? sampleChartData.slice(-30)
-    : [];
+  const fpsChartData = useMemo(
+    () => sampleChartData.filter((item) => item.fps > 0).slice(0, 60),
+    [sampleChartData],
+  );
+  const resourceChartData = useMemo(
+    () => sampleChartData.slice(-60),
+    [sampleChartData],
+  );
+  const drawCallChartData = useMemo(
+    () => sampleChartData.slice(-60),
+    [sampleChartData],
+  );
+  const hasDrawCallData = useMemo(
+    () => sampleChartData.some((item) => item.drawCalls > 0),
+    [sampleChartData],
+  );
 
   const renderQuality = fullReport?.render_quality_assessment;
 
@@ -201,8 +204,10 @@ const Analysis: React.FC = () => {
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}
           {Number.isFinite(sessionId) ? (
             <>
-              <Tag color="processing">#{sessionId}</Tag>
-              {currentSessionName && <Tag>{currentSessionName}</Tag>}
+              {currentSessionName && <Tag color="default">{currentSessionName}</Tag>}
+              {currentSceneLabel && currentSceneLabel !== '-' && (
+                <Tag color="geekblue">{currentSceneLabel}</Tag>
+              )}
             </>
           ) : (
             <Tag color="default">未指定会话</Tag>
@@ -335,7 +340,7 @@ const Analysis: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
                 <YAxis yAxisId="left" domain={[0, 100]} />
-                <YAxis yAxisId="right" orientation="right" domain={[0, 5]} />
+                <YAxis yAxisId="right" orientation="right" domain={[0, 'auto']} />
                 <Tooltip />
                 <Legend />
                 <Line yAxisId="left" type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU (%)" strokeWidth={2} dot={false} />
@@ -344,6 +349,25 @@ const Analysis: React.FC = () => {
                 <Line yAxisId="right" type="monotone" dataKey="vram" stroke="#f59e0b" name="显存 (GB)" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
+            )}
+          </Card>
+        </TabPane>
+
+        <TabPane tab="Draw Calls" key="drawcalls">
+          <Card>
+            {!hasDrawCallData ? (
+              <MetricSkippedPlaceholder title="Draw Calls 未纳入本次测试或无采样数据" />
+            ) : (
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={drawCallChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis allowDecimals={false} domain={[0, 'auto']} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="drawCalls" stroke="#8b5cf6" name="Draw Calls" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
             )}
           </Card>
         </TabPane>

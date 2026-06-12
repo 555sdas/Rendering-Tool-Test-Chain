@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -95,10 +96,13 @@ class UnityRunnerService:
         self,
         *,
         test_scope: dict[str, Any] | None,
-        metric_checks: dict[str, bool],
-        quality_checks: dict[str, bool],
-        quality_metric_checks: dict[str, bool],
+        metric_checks: dict[str, bool] | None = None,
+        quality_checks: dict[str, bool] | None = None,
+        quality_metric_checks: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
+        metric_checks = metric_checks or {}
+        quality_checks = quality_checks or {}
+        quality_metric_checks = quality_metric_checks or {}
         if test_scope:
             scope = TestScopeService.normalize_scope(test_scope, source="single_run_override")
         else:
@@ -217,6 +221,23 @@ class UnityRunnerService:
         self.db.add(task)
         self.db.flush()
 
+        from app.services.unity_project_lease_service import UnityProjectLeaseService
+
+        project_path = UnityProjectLeaseService.normalize_project_path(scene["project_path"])
+        lease_service = UnityProjectLeaseService(self.db)
+        try:
+            lease_service.acquire(
+                project_path=project_path,
+                owner_type="single_scene",
+                owner_id=task.id,
+                parent_task_id=task.id,
+            )
+        except HTTPException:
+            session.status = TestSessionStatus.CANCELLED.value
+            task.status = TestTaskStatus.CANCELLED.value
+            self.db.commit()
+            raise
+
         task_config_path, unity_log_path, runner_log_path = self._write_task_config(
             task=task,
             session=session,
@@ -273,6 +294,7 @@ class UnityRunnerService:
             session.ended_at = datetime.utcnow()
             if session.started_at:
                 session.duration_seconds = self._duration_seconds(session.started_at, session.ended_at)
+            lease_service.release(project_path)
             self.db.commit()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"启动 Unity 失败：{exc}") from exc
 
@@ -368,6 +390,10 @@ class UnityRunnerService:
             self._terminate_process(pid, runner_log_path)
         else:
             self._request_existing_editor_stop(task_config, task.id, runner_log_path)
+
+        from app.services.unity_project_lease_service import UnityProjectLeaseService
+
+        UnityProjectLeaseService(self.db).release_by_owner("single_scene", task_id)
         self._append_runner_log(runner_log_path, "INFO", "Unity 停止流程已完成，会话已标记为已取消。")
 
         return {
@@ -935,6 +961,25 @@ class UnityRunnerService:
         with inbox.open("w", encoding="utf-8") as file:
             json.dump({"configPath": str(task_config_path)}, file, ensure_ascii=False)
 
+    def _request_orchestration_abort(self, batch_id: int, task_config: dict[str, Any]) -> None:
+        project_path = self._path_or_none(task_config.get("unity_project_path"))
+        if not project_path:
+            return
+        command_dir = project_path / "Library" / "XRDataCollector"
+        command_dir.mkdir(parents=True, exist_ok=True)
+        command_path = command_dir / f"orchestration-command-{batch_id}.json"
+        payload = {
+            "schemaVersion": 1,
+            "commandId": str(uuid.uuid4()),
+            "batchId": batch_id,
+            "action": "abort",
+        }
+        temp_path = command_path.with_suffix(".json.tmp")
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        temp_path.replace(command_path)
+
     def _request_existing_editor_stop(
         self,
         task_config: dict[str, Any],
@@ -979,6 +1024,11 @@ class UnityRunnerService:
         task.completed_at = task.completed_at or session.ended_at or datetime.utcnow()
         if task.started_at and task.completed_at:
             task.duration_seconds = self._duration_seconds(task.started_at, task.completed_at)
+        task_config = dict(task.config or {})
+        if task_config.get("run_mode") != "multi_scene":
+            from app.services.unity_project_lease_service import UnityProjectLeaseService
+
+            UnityProjectLeaseService(self.db).release_by_owner("single_scene", task.id)
         self.db.commit()
         self.db.refresh(task)
 
@@ -1070,11 +1120,20 @@ class UnityRunnerService:
         task_id: int,
         session_id: int,
         runner_log_path: Path,
+        batch_id: int | None = None,
     ) -> None:
         def monitor() -> None:
             def session_completed() -> bool:
                 status_db = SessionLocal()
                 try:
+                    if batch_id:
+                        from app.models.test_batch import TestBatch
+                        from app.services.unity_batch_state import TERMINAL_BATCH_STATUSES
+
+                        batch = status_db.query(TestBatch).filter(TestBatch.id == batch_id).first()
+                        return batch is not None and batch.status in TERMINAL_BATCH_STATUSES
+                    if session_id <= 0:
+                        return False
                     session = status_db.query(TestSession).filter(TestSession.id == session_id).first()
                     return (
                         session is not None
@@ -1097,7 +1156,40 @@ class UnityRunnerService:
 
                 task_status = self._task_status_value(task.status)
                 session_status = self._session_status_value(session.status) if session else ""
-                if session_status == TestSessionStatus.COMPLETED.value:
+                if batch_id:
+                    from app.models.test_batch import TestBatch, TestBatchStatus
+
+                    batch = db.query(TestBatch).filter(TestBatch.id == batch_id).first()
+                    if batch and batch.status == TestBatchStatus.COMPLETED.value:
+                        task.status = TestTaskStatus.COMPLETED.value
+                        task.error_message = None
+                    elif batch and batch.status == TestBatchStatus.CANCELLED.value:
+                        task.status = TestTaskStatus.CANCELLED.value
+                    elif batch and batch.status in {
+                        TestBatchStatus.FAILED.value,
+                        TestBatchStatus.PARTIAL_COMPLETED.value,
+                    }:
+                        task.status = TestTaskStatus.FAILED.value
+                        task.error_message = batch.result_summary.get("latest_error") if batch.result_summary else None
+                    elif task_status in {
+                        TestTaskStatus.RUNNING.value,
+                        TestTaskStatus.QUEUED.value,
+                        TestTaskStatus.PENDING.value,
+                    }:
+                        task.status = TestTaskStatus.FAILED.value
+                        task.error_message = (
+                            f"Unity 进程异常退出，退出码 {return_code}"
+                            if return_code != 0
+                            else "Unity 进程已退出，但多场景编排未完成"
+                        )
+                    else:
+                        self._append_runner_log(
+                            runner_log_path,
+                            "INFO",
+                            f"Unity 进程已退出并回收：pid={process.pid}，退出码={return_code}，任务状态={task_status}",
+                        )
+                        return
+                elif session_status == TestSessionStatus.COMPLETED.value:
                     task.status = TestTaskStatus.COMPLETED.value
                     task.error_message = None
                 elif task_status in {
@@ -1489,9 +1581,18 @@ class UnityRunnerService:
         }
 
     def _session_response(self, session: TestSession) -> dict[str, Any]:
+        from app.utils.session_display import get_session_scene_display_name
+
+        scene_asset_name = session.scene.name if getattr(session, "scene", None) is not None else None
+        scene_display_name = get_session_scene_display_name(
+            config=session.config,
+            scene_id=session.scene_id,
+            scene_asset_name=scene_asset_name,
+        )
         return {
             "id": session.id,
             "name": session.name,
+            "scene_display_name": scene_display_name,
             "description": session.description,
             "status": session.status.value if hasattr(session.status, "value") else session.status,
             "device_model": session.device_model,

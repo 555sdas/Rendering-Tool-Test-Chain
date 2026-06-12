@@ -8,6 +8,8 @@ from app.models.test_report import TestReport, ReportFormat
 from app.models.scene_asset import SceneAsset, AssetType
 from app.models.threshold_rule import ThresholdRule, ThresholdSeverity
 from app.models.cloud_ar_session import CloudARSession, CloudARSessionStatus
+from app.models.test_batch import TestBatch, TestBatchItem, TestBatchStatus, TestBatchItemStatus
+from app.models.unity_project_lease import UnityProjectLease
 
 __all__ = [
     "User",
@@ -31,4 +33,9 @@ __all__ = [
     "ThresholdSeverity",
     "CloudARSession",
     "CloudARSessionStatus",
+    "TestBatch",
+    "TestBatchItem",
+    "TestBatchStatus",
+    "TestBatchItemStatus",
+    "UnityProjectLease",
 ]

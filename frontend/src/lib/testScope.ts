@@ -15,6 +15,17 @@ export interface MetricCatalogEntry {
   parent_id?: string | null;
   default_enabled?: boolean;
   description?: string;
+  measurement_tier?: string | null;
+  implementation_status?: string | null;
+  measurement_semantics?: string | null;
+  required_capabilities?: string[] | null;
+  fallback_policy?: string | null;
+}
+
+export interface MetricHelpTooltip {
+  description: string;
+  notices: string[];
+  isSpecial: boolean;
 }
 
 export interface MetricCatalog {
@@ -149,15 +160,130 @@ const FALLBACK_DESCRIPTIONS: Record<string, string> = {
   'physics.long_frames': '统计测试过程中单帧耗时超过 33ms 的长帧出现次数。',
 };
 
-export function getMetricDescription(metricId: string, catalog?: MetricCatalog | null): string | undefined {
+const CAPABILITY_LABELS: Record<string, string> = {
+  camera: '需场景有可用的相机，并具备画面分析能力',
+  rendering_stats: '需 Unity 提供 Rendering Stats / Profiler 绘制统计',
+  srp_volume: '需使用支持 Volume 的渲染管线（如 URP/HDRP）',
+  gpu: '需当前环境支持 GPU 占用采集',
+  frame_time: '需当前环境支持帧时间采集',
+  xr_pose_timing_provider: '需 XR 设备/运行时提供姿态时序接口',
+  xr_prediction_provider: '需 XR 设备/运行时提供姿态预测接口',
+};
+
+const FALLBACK_METRIC_META: Record<string, Partial<MetricCatalogEntry>> = {
+  'lighting.exposure_artifacts': {
+    default_enabled: false,
+    measurement_tier: 'conditional',
+    implementation_status: 'planned',
+    required_capabilities: ['camera'],
+  },
+  'post_processing.volumes': {
+    default_enabled: true,
+    measurement_tier: 'conditional',
+    implementation_status: 'implemented',
+    required_capabilities: ['srp_volume'],
+  },
+  'materials.draw_calls': {
+    default_enabled: true,
+    measurement_tier: 'native',
+    implementation_status: 'implemented',
+    required_capabilities: ['rendering_stats'],
+  },
+  'post_processing.gpu_frame_budget': {
+    default_enabled: true,
+    measurement_tier: 'derived',
+    implementation_status: 'implemented',
+    required_capabilities: ['gpu', 'frame_time'],
+  },
+  'physics.pose_latency': {
+    default_enabled: false,
+    measurement_tier: 'provider_required',
+    implementation_status: 'unsupported',
+    required_capabilities: ['xr_pose_timing_provider'],
+  },
+  'physics.prediction_error': {
+    default_enabled: false,
+    measurement_tier: 'provider_required',
+    implementation_status: 'unsupported',
+    required_capabilities: ['xr_prediction_provider'],
+  },
+};
+
+export function getMetricCatalogEntry(metricId: string, catalog?: MetricCatalog | null): MetricCatalogEntry | null {
   if (catalog) {
     for (const entry of [...catalog.basic_metrics, ...catalog.quality_metrics]) {
-      if (entry.id === metricId && entry.description) {
-        return entry.description;
-      }
+      if (entry.id === metricId) return entry;
     }
   }
-  return FALLBACK_DESCRIPTIONS[metricId];
+  const fallback = FALLBACK_METRIC_META[metricId];
+  if (!fallback && !FALLBACK_DESCRIPTIONS[metricId]) return null;
+  return {
+    id: metricId,
+    label: FALLBACK_LABELS[metricId] || metricId,
+    group: metricId.includes('.') ? 'quality_metric' : 'basic_metric',
+    description: FALLBACK_DESCRIPTIONS[metricId],
+    ...fallback,
+  };
+}
+
+function buildMetricHelpNotices(entry: MetricCatalogEntry): string[] {
+  const notices: string[] = [];
+
+  if (entry.default_enabled === false) {
+    notices.push('默认不勾选：该指标依赖额外设备或运行时能力，并非所有测试环境都能采集。');
+  }
+
+  if (entry.implementation_status === 'unsupported') {
+    notices.push('当前版本尚未实现该指标采集；手动勾选后，结果可能显示为「不支持」。');
+  } else if (entry.implementation_status === 'planned') {
+    notices.push('该指标尚在规划中，当前环境可能无法得到有效数据。');
+  }
+
+  if (entry.measurement_tier === 'provider_required') {
+    notices.push('需 XR 头显/运行时提供专用数据接口；在普通 Editor 预览或未接入 XR SDK 时通常无法采集。');
+  } else if (entry.measurement_tier === 'conditional' && entry.default_enabled === false) {
+    notices.push('仅在满足特定场景/管线条件时才能采集。');
+  }
+
+  const capabilities = entry.required_capabilities || [];
+  if (capabilities.length > 0) {
+    const labels = capabilities.map((capability) => CAPABILITY_LABELS[capability] || capability);
+    notices.push(`环境要求：${labels.join('；')}。`);
+  }
+
+  if (notices.length > 0) {
+    notices.push('未满足条件时结果会标记为「不可用」或「不支持」，属于预期行为，并非系统故障。');
+  }
+
+  return notices;
+}
+
+export function isMetricWithSpecialRequirements(entry: MetricCatalogEntry | null | undefined): boolean {
+  if (!entry) return false;
+  return (
+    entry.default_enabled === false
+    || entry.implementation_status === 'unsupported'
+    || entry.implementation_status === 'planned'
+    || entry.measurement_tier === 'provider_required'
+    || (entry.required_capabilities?.length ?? 0) > 0
+  );
+}
+
+export function getMetricHelpTooltip(metricId: string, catalog?: MetricCatalog | null): MetricHelpTooltip | null {
+  const entry = getMetricCatalogEntry(metricId, catalog);
+  const description = entry?.description || FALLBACK_DESCRIPTIONS[metricId];
+  if (!description) return null;
+
+  const notices = entry ? buildMetricHelpNotices(entry) : [];
+  return {
+    description,
+    notices,
+    isSpecial: isMetricWithSpecialRequirements(entry),
+  };
+}
+
+export function getMetricDescription(metricId: string, catalog?: MetricCatalog | null): string | undefined {
+  return getMetricHelpTooltip(metricId, catalog)?.description;
 }
 
 export function buildBuiltinDefaultScope(source = 'built_in_default'): TestScope {

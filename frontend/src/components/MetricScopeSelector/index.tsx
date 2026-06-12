@@ -7,7 +7,7 @@ import {
   buildScopeSummary,
   fillScopeKeys,
   getCategoryCheckState,
-  getMetricDescription,
+  getMetricHelpTooltip,
   hasAnyEnabledLeaf,
   setAllScopeMetrics,
   toggleCategory,
@@ -23,15 +23,34 @@ interface MetricLabelWithHelpProps {
 }
 
 const MetricLabelWithHelp: React.FC<MetricLabelWithHelpProps> = ({ label, metricId, catalog }) => {
-  const description = getMetricDescription(metricId, catalog);
-  if (!description) return <>{label}</>;
+  const help = getMetricHelpTooltip(metricId, catalog);
+  if (!help) return <>{label}</>;
+
+  const tooltipTitle = (
+    <div className="metric-scope-selector__tooltip">
+      <div className="metric-scope-selector__tooltip-desc">{help.description}</div>
+      {help.notices.length > 0 && (
+        <div className="metric-scope-selector__tooltip-notices">
+          {help.notices.map((notice) => (
+            <div key={notice} className="metric-scope-selector__tooltip-notice">
+              {notice}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <span className="metric-scope-selector__metric-label">
       {label}
-      <Tooltip title={description} placement="top">
+      <Tooltip title={tooltipTitle} placement="topLeft" styles={{ root: { maxWidth: 360 } }}>
         <QuestionCircleOutlined
-          className="metric-scope-selector__help-icon"
+          className={
+            help.isSpecial
+              ? 'metric-scope-selector__help-icon metric-scope-selector__help-icon--special'
+              : 'metric-scope-selector__help-icon'
+          }
           onClick={(event) => event.preventDefault()}
           onMouseDown={(event) => event.stopPropagation()}
         />
@@ -147,6 +166,7 @@ const MetricScopeSelector: React.FC<MetricScopeSelectorProps> = ({
               ? `本次将测试 ${summary.selected_count} 项，跳过 ${summary.skipped_count} 项`
               : '请至少选择一个测试指标'
           }
+          description="带橙色问号的指标需额外设备或运行时支持，默认不勾选属正常情况；悬停问号可查看说明。"
         />
       )}
 

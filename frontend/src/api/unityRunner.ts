@@ -144,6 +144,22 @@ export interface UnityRealtimeProgress {
   test_scope_summary?: TestScopeSummary;
   selected_metric_ids?: string[];
   skipped_metric_ids?: string[];
+  run_mode?: 'single_scene' | 'multi_scene';
+  batch_id?: number;
+  batch_status?: string;
+  batch_item_id?: number;
+  scene_index?: number;
+  scene_total?: number;
+  scene_resource_id?: string;
+  scene_display_name?: string;
+  scene_session_id?: number;
+  scene_task_id?: number;
+  attempt?: number;
+  scene_progress?: number;
+  overall_progress?: number;
+  allowed_actions?: string[];
+  error_message?: string;
+  message?: string;
 }
 
 export function createUnityProgressWebSocket(taskId: number): WebSocket {

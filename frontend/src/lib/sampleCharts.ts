@@ -10,6 +10,19 @@ export interface SampleChartPoint {
   drawCalls: number;
 }
 
+function resolveGraphicsMemoryMb(sample: PerformanceSample): number {
+  const extra = sample.extra_metrics || {};
+  const fromExtra = extra.graphics_memory_mb ?? extra.graphicsMemoryMB;
+  if (typeof fromExtra === 'number' && Number.isFinite(fromExtra)) {
+    return fromExtra;
+  }
+  if (typeof fromExtra === 'string' && fromExtra.trim()) {
+    const parsed = Number(fromExtra);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Number(sample.texture_memory_mb || sample.render_texture_memory_mb || 0);
+}
+
 export function buildSampleChartData(samples: PerformanceSample[]): SampleChartPoint[] {
   return samples.slice(0, 120).map((sample, index) => ({
     time: `${index}s`,
@@ -17,9 +30,7 @@ export function buildSampleChartData(samples: PerformanceSample[]): SampleChartP
     cpu: Number(sample.cpu_usage_percent || 0),
     gpu: Number(sample.gpu_usage_percent || 0),
     memory: Number(((sample.memory_mb || 0) / 1024).toFixed(2)),
-    vram: Number((
-      (sample.texture_memory_mb || sample.render_texture_memory_mb || 0) / 1024
-    ).toFixed(2)),
+    vram: Number((resolveGraphicsMemoryMb(sample) / 1024).toFixed(2)),
     drawCalls: Number(sample.draw_calls || 0),
   }));
 }

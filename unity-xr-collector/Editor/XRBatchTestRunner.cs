@@ -32,6 +32,8 @@ namespace XRDataCollector.Editor
             EditorApplication.update += PollPendingTask;
             EditorApplication.playModeStateChanged += OnGlobalPlayModeStateChanged;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            if (XROrchestrationRunner.IsOrchestrationActive())
+                return;
             if (!string.IsNullOrEmpty(SessionState.GetString(PendingTaskConfigKey, string.Empty)))
             {
                 EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
@@ -104,12 +106,18 @@ namespace XRDataCollector.Editor
                 throw new FileNotFoundException("任务配置文件不存在。", configPath);
 
             string json = File.ReadAllText(configPath);
+            if (XROrchestrationConfigParser.IsMultiSceneConfig(json))
+            {
+                XROrchestrationRunner.RunFromConfigPath(configPath, json);
+                return;
+            }
+
             taskConfig = JsonUtility.FromJson<XRBatchTaskConfig>(json);
             if (taskConfig == null)
                 throw new InvalidOperationException("任务配置解析失败。");
 
             SessionState.SetString(PendingTaskConfigKey, json);
-            EnableFrameTimingStats();
+            EnableFrameTimingStatsInternal();
 
             Debug.Log($"[XRBatchTestRunner] 已读取任务配置：{configPath}");
             Debug.Log($"[XRBatchTestRunner] 任务 {taskConfig.taskId} / 平台会话 {taskConfig.platformSessionId}，项目 {taskConfig.projectId}，场景 {taskConfig.unityScenePath}");
@@ -119,8 +127,8 @@ namespace XRDataCollector.Editor
             SessionState.EraseString(PendingExitReadyAtKey);
             SessionState.EraseString(PendingCollectionReadyAtKey);
             shutdownScheduled = false;
-            OpenConfiguredScene(taskConfig);
-            var manager = EnsureManager();
+            OpenConfiguredSceneInternal(taskConfig.unityProjectPath, taskConfig.unityScenePath);
+            var manager = EnsureManagerInternal();
             ApplyTaskConfig(manager, taskConfig);
 
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -403,10 +411,15 @@ namespace XRDataCollector.Editor
             manager.OnSessionStopped -= OnSessionStopped;
         }
 
-        private static void ScheduleEditorExitPolling()
+        internal static void ScheduleEditorExitPollingInternal()
         {
             EditorApplication.update -= ExitWhenEditorReady;
             EditorApplication.update += ExitWhenEditorReady;
+        }
+
+        private static void ScheduleEditorExitPolling()
+        {
+            ScheduleEditorExitPollingInternal();
         }
 
         private static void ExitWhenEditorReady()
@@ -436,13 +449,13 @@ namespace XRDataCollector.Editor
             Finish(1);
         }
 
-        private static void OpenConfiguredScene(XRBatchTaskConfig config)
+        internal static void OpenConfiguredSceneInternal(string unityProjectPath, string unityScenePath)
         {
-            if (string.IsNullOrEmpty(config.unityScenePath)) return;
-            string assetPath = config.unityScenePath.Replace("\\", "/");
-            string projectPath = string.IsNullOrEmpty(config.unityProjectPath)
+            if (string.IsNullOrEmpty(unityScenePath)) return;
+            string assetPath = unityScenePath.Replace("\\", "/");
+            string projectPath = string.IsNullOrEmpty(unityProjectPath)
                 ? Directory.GetCurrentDirectory()
-                : config.unityProjectPath;
+                : unityProjectPath;
             if (Path.IsPathRooted(assetPath))
             {
                 string assetsRoot = Path.Combine(projectPath, "Assets").Replace("\\", "/").TrimEnd('/');
@@ -462,7 +475,7 @@ namespace XRDataCollector.Editor
                 Debug.LogWarning($"[XRBatchTestRunner] 场景 {openedScene.path} 中没有启用的 Camera，Game 窗口将显示 No cameras rendering。");
         }
 
-        private static XRTestManager EnsureManager()
+        internal static XRTestManager EnsureManagerInternal()
         {
             var manager = UnityEngine.Object.FindObjectOfType<XRTestManager>();
             if (manager != null) return manager;
@@ -473,7 +486,7 @@ namespace XRDataCollector.Editor
             return manager;
         }
 
-        private static void EnableFrameTimingStats()
+        internal static void EnableFrameTimingStatsInternal()
         {
             try
             {
@@ -505,6 +518,85 @@ namespace XRDataCollector.Editor
             Debug.Log("[XRBatchTestRunner] 已在 Play Mode 重新应用网页任务配置。");
         }
 
+        internal static void ApplySceneRunConfig(
+            XRTestManager manager,
+            XRSceneRunConfig scene,
+            XROrchestrationTaskConfig root)
+        {
+            var config = manager.Config;
+            config.sessionName = string.IsNullOrEmpty(scene.sessionName) ? "Unity Web Test" : scene.sessionName;
+            config.collectInterval = scene.collectInterval > 0 ? scene.collectInterval : 1f;
+            config.frameRateDurationSeconds = scene.frameRateDurationSeconds > 0 ? scene.frameRateDurationSeconds : 30f;
+            config.metricsDurationSeconds = scene.metricsDurationSeconds > 0 ? scene.metricsDurationSeconds : 30f;
+            config.collectFrameRate = scene.collectFrameRate;
+            config.collectFrameTime = scene.collectFrameTime;
+            config.collectCpuUsage = scene.collectCpuUsage;
+            config.collectGpuUsage = scene.collectGpuUsage;
+            config.collectMemory = scene.collectMemory;
+            config.collectDeviceInfo = scene.collectDeviceInfo;
+            config.collectRenderingStats = scene.collectRenderingStats;
+            config.collectRenderQuality = scene.collectRenderQuality;
+            config.platformBaseUrl = scene.platformBaseUrl;
+            config.uploadUrl = scene.uploadUrl;
+            config.progressUrl = !string.IsNullOrEmpty(scene.progressUrl)
+                ? scene.progressUrl
+                : root != null ? root.progressUrl : string.Empty;
+            config.projectId = root != null ? root.projectId : 0;
+            config.projectName = scene.projectName;
+            config.sceneId = scene.sceneId;
+            config.platformSessionId = scene.platformSessionId;
+            config.testTaskId = scene.taskId;
+            config.progressTaskId = root != null ? root.parentTaskId : scene.taskId;
+            config.runMode = root != null ? root.runMode : "single_scene";
+            config.batchId = root != null ? root.batchId : 0;
+            config.batchItemId = scene.batchItemId;
+            config.sceneIndex = scene.sceneIndex;
+            config.sceneTotal = scene.sceneTotal;
+            config.attempt = scene.attempt > 0 ? scene.attempt : 1;
+            config.sceneDisplayName = scene.sceneDisplayName;
+            config.deviceToken = root != null ? root.deviceToken : string.Empty;
+            config.enableNetworkUpload = scene.enableNetworkUpload;
+            config.autoCreateSession = scene.autoCreateSession;
+            config.autoStart = scene.autoStart;
+            config.quitOnComplete = root != null && root.quitOnComplete;
+            config.forceAutoFlythroughOnStart = scene.forceAutoFlythroughOnStart;
+
+            if (scene.qualityChecks != null)
+            {
+                config.testLightingQuality = scene.qualityChecks.lighting;
+                config.testMaterialQuality = scene.qualityChecks.materials;
+                config.testPostProcessingQuality = scene.qualityChecks.postProcessing;
+                config.testPhysicsQuality = scene.qualityChecks.physics;
+            }
+
+            if (scene.qualityMetricChecks != null)
+            {
+                config.testLightingActiveLights = scene.qualityMetricChecks.lightingActiveLights;
+                config.testLightingRealtimeLights = scene.qualityMetricChecks.lightingRealtimeLights;
+                config.testLightingShadowCasters = scene.qualityMetricChecks.lightingShadowCasters;
+                config.testLightingReflectionProbes = scene.qualityMetricChecks.lightingReflectionProbes;
+                config.testLightingExposureArtifacts = scene.qualityMetricChecks.lightingExposureArtifacts;
+                config.testMaterialSlots = scene.qualityMetricChecks.materialSlots;
+                config.testMaterialUniqueMaterials = scene.qualityMetricChecks.materialUniqueMaterials;
+                config.testMaterialTransparentMaterials = scene.qualityMetricChecks.materialTransparentMaterials;
+                config.testMaterialDrawCalls = scene.qualityMetricChecks.materialDrawCalls;
+                config.testMaterialTextureMemory = scene.qualityMetricChecks.materialTextureMemory;
+                config.testPostProcessVolumes = scene.qualityMetricChecks.postProcessVolumes;
+                config.testPostProcessRenderTextures = scene.qualityMetricChecks.postProcessRenderTextures;
+                config.testPostProcessRenderTextureMemory = scene.qualityMetricChecks.postProcessRenderTextureMemory;
+                config.testPostProcessGpuFrameBudget = scene.qualityMetricChecks.postProcessGpuFrameBudget;
+                config.testPostProcessWarnings = scene.qualityMetricChecks.postProcessWarnings;
+                config.testPhysicsRigidbodies = scene.qualityMetricChecks.physicsRigidbodies;
+                config.testPhysicsColliders = scene.qualityMetricChecks.physicsColliders;
+                config.testPhysicsPenetration = scene.qualityMetricChecks.physicsPenetration;
+                config.testPhysicsPoseLatency = scene.qualityMetricChecks.physicsPoseLatency;
+                config.testPhysicsPredictionError = scene.qualityMetricChecks.physicsPredictionError;
+                config.testPhysicsLongFrames = scene.qualityMetricChecks.physicsLongFrames;
+            }
+
+            EditorUtility.SetDirty(manager);
+        }
+
         private static void ApplyTaskConfig(XRTestManager manager, XRBatchTaskConfig task)
         {
             var config = manager.Config;
@@ -528,6 +620,14 @@ namespace XRDataCollector.Editor
             config.sceneId = task.sceneId;
             config.platformSessionId = task.platformSessionId;
             config.testTaskId = task.taskId;
+            config.progressTaskId = task.taskId;
+            config.runMode = "single_scene";
+            config.batchId = 0;
+            config.batchItemId = 0;
+            config.sceneIndex = 0;
+            config.sceneTotal = 0;
+            config.attempt = 1;
+            config.sceneDisplayName = string.Empty;
             config.deviceToken = task.deviceToken;
             config.enableNetworkUpload = task.enableNetworkUpload;
             config.autoCreateSession = task.autoCreateSession;

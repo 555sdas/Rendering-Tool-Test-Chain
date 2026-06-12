@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models.test_task import TestTask
 from app.models.user import User
 from app.services.test_scope_service import TestScopeService
+from app.services.unity_batch_service import UnityBatchService
 from app.services.unity_runner_service import UnityRunnerService
 
 
@@ -23,12 +24,12 @@ _latest_progress: dict[int, dict[str, Any]] = {}
 
 class UnityProgressUpdate(BaseModel):
     task_id: int = Field(..., gt=0)
-    session_id: int = Field(..., gt=0)
-    phase: str
-    phase_label: str
-    progress: float = Field(..., ge=0, le=1)
-    remaining_seconds: float = Field(..., ge=0)
-    sample_count: int = Field(..., ge=0)
+    session_id: int = Field(0, ge=0)
+    phase: str = "orchestration"
+    phase_label: str = "编排状态"
+    progress: float = Field(0, ge=0, le=1)
+    remaining_seconds: float = Field(0, ge=0)
+    sample_count: int = Field(0, ge=0)
     fps: float = 0
     frame_time_ms: float = 0
     raw_frame_time_ms: float = 0
@@ -60,6 +61,22 @@ class UnityProgressUpdate(BaseModel):
     graphics_device_name: str = ""
     render_pipeline: str = ""
     screen_resolution: str = ""
+    run_mode: str | None = None
+    batch_id: int | None = None
+    batch_status: str | None = None
+    batch_item_id: int | None = None
+    scene_index: int | None = None
+    scene_total: int | None = None
+    scene_resource_id: str | None = None
+    scene_display_name: str | None = None
+    scene_session_id: int | None = None
+    scene_task_id: int | None = None
+    attempt: int | None = None
+    scene_progress: float | None = None
+    overall_progress: float | None = None
+    allowed_actions: list[str] | None = None
+    error_message: str | None = None
+    message: str | None = None
 
 
 async def broadcast(task_id: int, data: dict[str, Any]) -> None:
@@ -103,7 +120,18 @@ async def receive_progress(
     summary = dict(task.result_summary or {})
     summary["latest_progress"] = data
     task.result_summary = summary
-    UnityRunnerService(db).append_progress_event_log(task, data)
+    runner = UnityRunnerService(db)
+    runner.append_progress_event_log(task, data)
+    if data.get("run_mode") == "multi_scene" or (task.config or {}).get("run_mode") == "multi_scene":
+        batch_service = UnityBatchService(db)
+        batch_service.on_progress_event(task, data)
+        batch_id = data.get("batch_id") or (task.config or {}).get("batch_id")
+        if batch_id:
+            batch_detail = batch_service.get_batch(int(batch_id))
+            batch_summary = (batch_detail.get("batch") or {}).get("result_summary") or {}
+            if batch_summary.get("overall_progress") is not None:
+                data["overall_progress"] = batch_summary["overall_progress"]
+            data["allowed_actions"] = batch_detail.get("allowed_actions") or []
     db.commit()
     await broadcast(task_id, data)
     return {"ok": True}

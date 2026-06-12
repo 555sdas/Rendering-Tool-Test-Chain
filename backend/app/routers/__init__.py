@@ -11,6 +11,7 @@ from app.routers.cloud_ar import router as cloud_ar_router
 from app.routers.unity_runner import router as unity_runner_router
 from app.routers.system_settings import router as system_settings_router
 from app.routers.progress_ws import router as progress_ws_router
+from app.routers.unity_batches import router as unity_batches_router
 
 __all__ = [
     "auth_router",
@@ -25,4 +26,6 @@ __all__ = [
     "cloud_ar_router",
     "unity_runner_router",
     "system_settings_router",
+    "progress_ws_router",
+    "unity_batches_router",
 ]

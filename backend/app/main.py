@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.config import get_settings
-from app.database import init_db
+from app.database import SessionLocal, init_db
 from app.core.middleware import setup_cors, setup_security_headers, setup_request_logging
 from app.routers import (
     auth_router,
@@ -16,6 +16,7 @@ from app.routers import (
     unity_runner_router,
     system_settings_router,
     progress_ws_router,
+    unity_batches_router,
 )
 
 settings = get_settings()
@@ -46,11 +47,19 @@ app.include_router(cloud_ar_router, prefix=settings.API_V1_PREFIX)
 app.include_router(unity_runner_router, prefix=settings.API_V1_PREFIX)
 app.include_router(system_settings_router, prefix=settings.API_V1_PREFIX)
 app.include_router(progress_ws_router, prefix=settings.API_V1_PREFIX)
+app.include_router(unity_batches_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    db = SessionLocal()
+    try:
+        from app.services.unity_batch_service import UnityBatchService
+
+        UnityBatchService(db).reconcile_active_batches()
+    finally:
+        db.close()
 
 
 @app.get("/")

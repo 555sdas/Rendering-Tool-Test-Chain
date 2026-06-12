@@ -4,7 +4,6 @@ import {
   Card,
   Descriptions,
   Tag,
-  Table,
   Button,
   message,
   notification,
@@ -19,6 +18,7 @@ import {
   Steps,
   Typography,
   Tabs,
+  Modal,
 } from 'antd';
 import SessionResultPanel from '@/components/SessionResultPanel';
 import MetricScopeSelector from '@/components/MetricScopeSelector';
@@ -53,6 +53,12 @@ import {
 } from '@/api/unityRunner';
 import type { TestSession } from '@/api/sessions';
 import { formatDateTime, getApiDateTime } from '@/lib/datetime';
+import MultiSceneOrchestrationPanel from '@/components/MultiSceneOrchestrationPanel';
+import MultiSceneBatchMonitor from '@/components/MultiSceneBatchMonitor';
+import MultiSceneBatchResults from '@/components/MultiSceneBatchResults';
+import SessionHistoryList from '@/components/SessionHistoryList';
+import type { SceneRunDraft } from '@/components/MultiSceneOrchestrationPanel/types';
+import { unityBatchesApi, type UnityBatchDetail } from '@/api/unityBatches';
 import './ProjectDetail.css';
 
 const { Option } = Select;
@@ -74,6 +80,7 @@ const sessionStatusMap: Record<string, { color: string; text: string }> = {
 
 const RUNNING_SESSION_STATUSES = new Set(['pending', 'running']);
 const TERMINAL_SESSION_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_BATCH_STATUSES = new Set(['completed', 'partial_completed', 'failed', 'cancelled']);
 
 function isCollectingProgress(progress: UnityRealtimeProgress): boolean {
   return progress.phase !== 'uploading' && progress.phase_label !== '上传结果';
@@ -317,6 +324,11 @@ const ProjectDetail: React.FC = () => {
   const [metricsCatalog, setMetricsCatalog] = useState<MetricCatalog | null>(null);
   const [testScope, setTestScope] = useState<TestScope>(buildBuiltinDefaultScope('global_default'));
   const [activeRunScope, setActiveRunScope] = useState<TestScope | null>(null);
+  const [runMode, setRunMode] = useState<'single' | 'multi'>('single');
+  const [sceneDrafts, setSceneDrafts] = useState<SceneRunDraft[]>([]);
+  const [activeBatchDetail, setActiveBatchDetail] = useState<UnityBatchDetail | null>(null);
+  const [decisionModalOpen, setDecisionModalOpen] = useState(false);
+  const [decisionSubmitting, setDecisionSubmitting] = useState(false);
 
   const loadSessions = useCallback(async () => {
     if (!projectId) return;
@@ -360,6 +372,17 @@ const ProjectDetail: React.FC = () => {
           batchmode: false,
           ensure_plugin: true,
         });
+
+        try {
+          const activeBatch = await unityBatchesApi.getActive(Number(projectId));
+          if (activeBatch.data.item) {
+            setActiveBatchDetail(activeBatch.data.item);
+            setShowUnityConfig(false);
+            setRunMode('multi');
+          }
+        } catch {
+          // 活动批次查询失败时不阻断页面加载
+        }
       } catch {
         message.error('获取项目详情失败');
       } finally {
@@ -447,6 +470,87 @@ const ProjectDetail: React.FC = () => {
     if (!logElement) return;
     logElement.scrollTop = logElement.scrollHeight;
   }, [taskLogs]);
+
+  const activeBatchParentTaskId = activeBatchDetail?.parent_task?.id ?? null;
+  const activeBatchTerminal = activeBatchDetail
+    ? TERMINAL_BATCH_STATUSES.has(activeBatchDetail.batch.status)
+    : true;
+
+  useEffect(() => {
+    if (!activeBatchParentTaskId || activeBatchTerminal) return;
+    const taskId = activeBatchParentTaskId;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let disposed = false;
+
+    const connect = () => {
+      if (disposed) return;
+      setRealtimeConnection('connecting');
+      socket = createUnityProgressWebSocket(taskId);
+      socket.onopen = () => setRealtimeConnection('live');
+      socket.onmessage = (event) => {
+        try {
+          const progress = JSON.parse(event.data) as UnityRealtimeProgress;
+          if (progress.type === 'unity_progress') {
+            setRealtimeProgress(progress);
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      };
+      socket.onclose = () => {
+        if (disposed) return;
+        setRealtimeConnection('polling');
+        reconnectTimer = window.setTimeout(connect, 2000);
+      };
+      socket.onerror = () => setRealtimeConnection('polling');
+    };
+    connect();
+
+    const fetchLatestProgress = () => {
+      unityRunnerApi.getLatestProgress(taskId)
+        .then((progress) => {
+          if (progress) setRealtimeProgress(progress);
+        })
+        .catch(() => {
+          if (socket?.readyState !== WebSocket.OPEN) setRealtimeConnection('polling');
+        });
+    };
+    fetchLatestProgress();
+    const pollingTimer = window.setInterval(fetchLatestProgress, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(pollingTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [activeBatchParentTaskId, activeBatchTerminal]);
+
+  useEffect(() => {
+    if (!activeBatchParentTaskId || activeBatchTerminal) return;
+
+    const refreshTimer = window.setInterval(() => {
+      Promise.all([
+        unityBatchesApi.get(activeBatchDetail!.batch.id),
+        unityRunnerApi.getTaskLogs(activeBatchParentTaskId, { tail_lines: 400 }),
+        loadSessions(),
+      ])
+        .then(([batchRes, logs]) => {
+          setActiveBatchDetail(batchRes.data);
+          setTaskLogs(logs.lines || []);
+          setTaskError(logs.task.error_message || null);
+          if (batchRes.data.batch.status === 'awaiting_user_decision') {
+            setDecisionModalOpen(true);
+          }
+        })
+        .catch(() => {
+          message.warning('刷新多场景编排状态失败');
+        });
+    }, 3000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [activeBatchDetail, activeBatchParentTaskId, activeBatchTerminal, loadSessions]);
 
   useEffect(() => {
     if (!activeRun?.taskId || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
@@ -639,10 +743,115 @@ const ProjectDetail: React.FC = () => {
     }
   };
 
+  const handleStartMultiSceneBatch = async () => {
+    if (!projectId) return;
+    setTaskError(null);
+    let values;
+    try {
+      values = await form.validateFields(['unity_engine_id']);
+    } catch {
+      message.error('请先选择可用的 Unity 引擎');
+      return;
+    }
+    if (sceneDrafts.length < 2) {
+      message.error('多场景编排至少需要 2 个场景');
+      return;
+    }
+    if (new Set(sceneDrafts.map((item) => item.projectPath)).size > 1) {
+      message.error('所有场景必须属于同一 Unity 工程');
+      return;
+    }
+    if (sceneDrafts.some((item) => !hasAnyEnabledLeaf(item.testScope))) {
+      message.error('每个场景至少选择一个测试指标');
+      return;
+    }
+    setLaunching(true);
+    try {
+      const result = await unityBatchesApi.start({
+        project_id: Number(projectId),
+        unity_engine_id: values.unity_engine_id,
+        batchmode: Boolean(values.batchmode),
+        ensure_plugin: values.ensure_plugin !== false,
+        scenes: sceneDrafts.map((item) => ({
+          scene_resource_id: item.sceneResourceId,
+          test_scope: { ...item.testScope, source: 'batch_scene_override' },
+          collect_interval: item.collectInterval,
+          frame_rate_duration_seconds: item.frameRateDurationSeconds,
+          metrics_duration_seconds: item.metricsDurationSeconds,
+        })),
+      });
+      setActiveBatchDetail(result.data);
+      setShowUnityConfig(false);
+      setTaskLogs([]);
+      setTaskError(null);
+      setRealtimeProgress(null);
+      setRealtimeConnection('connecting');
+      setActiveTab('unity');
+      message.success(`多场景编排已启动，批次 ${result.data.batch.id}`);
+      await loadSessions();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '启动多场景编排失败';
+      setTaskError(errorMessage);
+      message.error(errorMessage);
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  const handleStopBatch = async () => {
+    if (!activeBatchDetail) return;
+    setStopping(true);
+    try {
+      const result = await unityBatchesApi.stop(activeBatchDetail.batch.id);
+      setActiveBatchDetail(result.data);
+      message.success('多场景编排已终止');
+      await loadSessions();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '终止多场景编排失败');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleBatchDecision = async (action: 'retry' | 'skip' | 'abort') => {
+    if (!activeBatchDetail) return;
+    const waitingItem = activeBatchDetail.items.find(
+      (item) => item.status === 'awaiting_user_decision' || item.scene_index === activeBatchDetail.batch.current_scene_index,
+    );
+    if (!waitingItem) {
+      message.error('未找到待处理的场景项');
+      return;
+    }
+    setDecisionSubmitting(true);
+    try {
+      const result = await unityBatchesApi.applyDecision(activeBatchDetail.batch.id, {
+        action,
+        expected_item_id: waitingItem.id,
+        expected_scene_index: waitingItem.scene_index,
+        decision_version: activeBatchDetail.batch.decision_version,
+      });
+      setActiveBatchDetail(result.data);
+      setDecisionModalOpen(false);
+      message.success(action === 'abort' ? '整批已终止' : action === 'skip' ? '已跳过当前场景' : '已重试当前场景');
+      await loadSessions();
+    } catch (error) {
+      try {
+        const refreshed = await unityBatchesApi.get(activeBatchDetail.batch.id);
+        setActiveBatchDetail(refreshed.data);
+      } catch {
+        // ignore refresh failure
+      }
+      message.error(error instanceof Error ? error.message : '提交决策失败');
+    } finally {
+      setDecisionSubmitting(false);
+    }
+  };
+
   const handleRestartUnityTest = async () => {
     setShowUnityConfig(true);
     setActiveRun(null);
     setActiveRunScope(null);
+    setActiveBatchDetail(null);
     try {
       const defaultScope = await unityRunnerApi.getDefaultTestScope();
       setTestScope(fillScopeKeys(defaultScope.default_scope, 'global_default'));
@@ -677,7 +886,14 @@ const ProjectDetail: React.FC = () => {
   const activeEstimate = activeRun ? getRunProgressDisplay(activeRun, now, realtimeProgress) : null;
   const collectionStep = activeRun ? getCollectionStepState(activeRun, realtimeProgress) : null;
   const monitorScope = activeRunScope;
-  const showUnitySession = !showUnityConfig && Boolean(launching || activeRun);
+  const showUnitySession = !showUnityConfig && Boolean(
+    launching || activeRun || (activeBatchDetail && !activeBatchTerminal),
+  );
+  const defaultDurations = {
+    collectInterval: form.getFieldValue('collect_interval') ?? 1,
+    frameRateDurationSeconds: form.getFieldValue('frame_rate_duration_seconds') ?? 30,
+    metricsDurationSeconds: form.getFieldValue('metrics_duration_seconds') ?? 30,
+  };
 
   if (loading) {
     return <Spin size="large" style={{ display: 'flex', justifyContent: 'center', marginTop: 80 }} />;
@@ -686,60 +902,6 @@ const ProjectDetail: React.FC = () => {
   if (!project) {
     return <div style={{ textAlign: 'center', marginTop: 80, color: '#999' }}>项目不存在</div>;
   }
-
-  const sessionColumns = [
-    {
-      title: '会话名称',
-      dataIndex: 'name',
-      key: 'name',
-      render: (text: string) => <strong>{text}</strong>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: string) => {
-        const config = sessionStatusMap[status] || sessionStatusMap.pending;
-        return <Tag color={config.color}>{config.text}</Tag>;
-      },
-    },
-    {
-      title: '设备',
-      dataIndex: 'device_model',
-      key: 'device_model',
-      render: (val: string | null) => val || '-',
-    },
-    {
-      title: '开始时间',
-      dataIndex: 'started_at',
-      key: 'started_at',
-      render: (date: string | null) => formatDateTime(date),
-    },
-    {
-      title: '结束时间',
-      dataIndex: 'ended_at',
-      key: 'ended_at',
-      render: (date: string | null) => formatDateTime(date),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: unknown, record: TestSession) => (
-        <Button
-          type="text"
-          icon={<EyeOutlined />}
-          size="small"
-          onClick={() =>
-            navigate(`/analysis?sessionId=${record.id}&projectId=${project.id}`, {
-              state: { returnTo: `/projects/${project.id}?tab=history` },
-            })
-          }
-        >
-          分析
-        </Button>
-      ),
-    },
-  ];
 
   return (
     <div>
@@ -797,7 +959,19 @@ const ProjectDetail: React.FC = () => {
           />
         )}
 
-        {showUnitySession && activeRun && activeEstimate && (
+        {showUnitySession && activeBatchDetail && !activeBatchTerminal && (
+          <MultiSceneBatchMonitor
+            batchDetail={activeBatchDetail}
+            realtime={realtimeProgress}
+            connection={realtimeConnection}
+            taskLogs={taskLogs}
+            stopping={stopping}
+            onStop={handleStopBatch}
+            onOpenDecision={() => setDecisionModalOpen(true)}
+          />
+        )}
+
+        {showUnitySession && activeRun && activeEstimate && !activeBatchDetail && (
           <div className="unity-monitor">
             <div className="unity-monitor-header">
               <div>
@@ -1004,14 +1178,34 @@ const ProjectDetail: React.FC = () => {
 
         {showUnityConfig && (
           <>
+            {launching && (
+              <Alert
+                type="info"
+                showIcon
+                message="正在启动 Unity"
+                description="如果当前 Unity Editor 中的采集插件源码有更新，启动可能需要等待重新编译，最长约 60 秒。"
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {taskError && (
+              <Alert
+                type="error"
+                showIcon
+                closable
+                message="Unity 启动失败"
+                description={taskError}
+                onClose={() => setTaskError(null)}
+                style={{ marginBottom: 16 }}
+              />
+            )}
             <div className="unity-config-heading">
               <Typography.Title level={4}>测试配置</Typography.Title>
-              <Typography.Text type="secondary">原有配置保持不变，可继续调整场景、采集时长与质量测试项。</Typography.Text>
+              <Typography.Text type="secondary">在下方 Tab 中选择单场景或多场景连续测试模式。</Typography.Text>
             </div>
             <Form
               form={form}
               layout="vertical"
-              onFinish={handleStartUnityTest}
+              onFinish={runMode === 'single' ? handleStartUnityTest : undefined}
             >
               <Form.Item
                 name="unity_engine_id"
@@ -1027,56 +1221,85 @@ const ProjectDetail: React.FC = () => {
                 </Select>
               </Form.Item>
 
-              <Form.Item
-                name="scene_resource_id"
-                label="测试场景"
-                extra="场景列表由系统设置中的 Unity 项目目录自动扫描生成。"
-                rules={[{ required: true, message: '请选择测试场景' }]}
-              >
-                <Select
-                  className="unity-scene-select"
-                  placeholder={scenes.length > 0 ? '请选择测试场景' : '请先在系统设置中配置 Unity 项目目录'}
-                  showSearch
-                  optionLabelProp="label"
-                  filterOption={(input, option) => {
-                    const scene = scenes.find((item) => item.id === option?.value);
-                    if (!scene) return false;
-                    const keyword = input.trim().toLowerCase();
-                    const haystack = `${scene.name} ${scene.scene_path}`.toLowerCase();
-                    return haystack.includes(keyword);
-                  }}
-                >
-                  {scenes.map((scene) => (
-                    <Option
-                      key={scene.id}
-                      value={scene.id}
-                      label={scene.name}
-                      disabled={!scene.enabled || !scene.exists}
-                    >
-                      <div className="unity-scene-option">
-                        <div className="unity-scene-option__name">{scene.name}</div>
-                        <div className="unity-scene-option__path">{scene.scene_path}</div>
-                      </div>
-                    </Option>
-                  ))}
-                </Select>
-              </Form.Item>
+              <Tabs
+                activeKey={runMode}
+                onChange={(key) => setRunMode(key as 'single' | 'multi')}
+                className="unity-run-mode-tabs"
+                items={[
+                  {
+                    key: 'single',
+                    label: '单场景',
+                    children: (
+                      <>
+                        <Form.Item
+                          name="scene_resource_id"
+                          label="测试场景"
+                          extra="场景列表由系统设置中的 Unity 项目目录自动扫描生成。"
+                          rules={[{ required: true, message: '请选择测试场景' }]}
+                        >
+                          <Select
+                            className="unity-scene-select"
+                            placeholder={scenes.length > 0 ? '请选择测试场景' : '请先在系统设置中配置 Unity 项目目录'}
+                            showSearch
+                            optionLabelProp="label"
+                            filterOption={(input, option) => {
+                              const scene = scenes.find((item) => item.id === option?.value);
+                              if (!scene) return false;
+                              const keyword = input.trim().toLowerCase();
+                              const haystack = `${scene.name} ${scene.scene_path}`.toLowerCase();
+                              return haystack.includes(keyword);
+                            }}
+                          >
+                            {scenes.map((scene) => (
+                              <Option
+                                key={scene.id}
+                                value={scene.id}
+                                label={scene.name}
+                                disabled={!scene.enabled || !scene.exists}
+                              >
+                                <div className="unity-scene-option">
+                                  <div className="unity-scene-option__name">{scene.name}</div>
+                                  <div className="unity-scene-option__path">{scene.scene_path}</div>
+                                </div>
+                              </Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
 
-              <Space size="large" wrap>
-                <Form.Item name="collect_interval" label="采集间隔（秒）" rules={[{ required: true }]}>
-                  <InputNumber min={0.1} max={10} step={0.1} style={{ width: 160 }} />
-                </Form.Item>
-                <Form.Item name="frame_rate_duration_seconds" label="帧率采集时长（秒）" rules={[{ required: true }]}>
-                  <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
-                </Form.Item>
-                <Form.Item name="metrics_duration_seconds" label="指标采集时长（秒）" rules={[{ required: true }]}>
-                  <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
-                </Form.Item>
-              </Space>
+                        <Space size="large" wrap>
+                          <Form.Item name="collect_interval" label="采集间隔（秒）" rules={[{ required: true }]}>
+                            <InputNumber min={0.1} max={10} step={0.1} style={{ width: 160 }} />
+                          </Form.Item>
+                          <Form.Item name="frame_rate_duration_seconds" label="帧率采集时长（秒）" rules={[{ required: true }]}>
+                            <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
+                          </Form.Item>
+                          <Form.Item name="metrics_duration_seconds" label="指标采集时长（秒）" rules={[{ required: true }]}>
+                            <InputNumber min={1} max={600} step={1} style={{ width: 180 }} />
+                          </Form.Item>
+                        </Space>
 
-              <Form.Item label="测试指标" required>
-                <MetricScopeSelector value={testScope} catalog={metricsCatalog} onChange={setTestScope} />
-              </Form.Item>
+                        <Form.Item label="测试指标" required>
+                          <MetricScopeSelector value={testScope} catalog={metricsCatalog} onChange={setTestScope} />
+                        </Form.Item>
+                      </>
+                    ),
+                  },
+                  {
+                    key: 'multi',
+                    label: '多场景连续',
+                    children: (
+                      <MultiSceneOrchestrationPanel
+                        scenes={scenes}
+                        defaultScope={testScope}
+                        defaultDurations={defaultDurations}
+                        drafts={sceneDrafts}
+                        onChange={setSceneDrafts}
+                        metricsCatalog={metricsCatalog}
+                      />
+                    ),
+                  },
+                ]}
+              />
 
               <Space size="large" wrap>
                 <Form.Item name="ensure_plugin" valuePropName="checked">
@@ -1087,19 +1310,42 @@ const ProjectDetail: React.FC = () => {
                 </Form.Item>
               </Space>
 
-              <Button
-                type="primary"
-                htmlType="submit"
-                icon={<PlayCircleOutlined />}
-                loading={launching}
-              >
-                启动 Unity 测试
-              </Button>
+              {runMode === 'single' ? (
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  icon={<PlayCircleOutlined />}
+                  loading={launching}
+                >
+                  启动 Unity 测试
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  htmlType="button"
+                  icon={<PlayCircleOutlined />}
+                  loading={launching}
+                  onClick={handleStartMultiSceneBatch}
+                >
+                  启动多场景编排
+                </Button>
+              )}
             </Form>
           </>
         )}
 
-        {showUnitySession && resultSessionId && activeRun?.status === 'completed' && (
+        {showUnitySession && activeBatchDetail && activeBatchTerminal && (
+          <div style={{ marginTop: 16 }}>
+            <Space style={{ marginBottom: 12 }}>
+              <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleRestartUnityTest}>
+                再次开始测试
+              </Button>
+            </Space>
+            <MultiSceneBatchResults items={activeBatchDetail.items} />
+          </div>
+        )}
+
+        {showUnitySession && resultSessionId && activeRun?.status === 'completed' && !activeBatchDetail && (
           <div className="unity-result-section">
             <div className="unity-result-heading">
               <Typography.Title level={4}>测试结果</Typography.Title>
@@ -1126,11 +1372,13 @@ const ProjectDetail: React.FC = () => {
                       刷新会话
                     </Button>
                   </div>
-                  <Table
-                    columns={sessionColumns}
-                    dataSource={sessions}
-                    rowKey="id"
-                    pagination={{ pageSize: 10 }}
+                  <SessionHistoryList
+                    sessions={sessions}
+                    onAnalyze={(sessionId) =>
+                      navigate(`/analysis?sessionId=${sessionId}&projectId=${project.id}`, {
+                        state: { returnTo: `/projects/${project.id}?tab=history` },
+                      })
+                    }
                   />
                 </>
               ),
@@ -1138,6 +1386,46 @@ const ProjectDetail: React.FC = () => {
           ]}
         />
       </Card>
+
+      <Modal
+        title="场景执行失败"
+        open={decisionModalOpen && Boolean(activeBatchDetail)}
+        onCancel={() => setDecisionModalOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        {activeBatchDetail && (
+          <>
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`场景 ${activeBatchDetail.batch.current_scene_index + 1}/${activeBatchDetail.batch.scene_total} 执行失败`}
+              description={
+                activeBatchDetail.items.find((item) => item.scene_index === activeBatchDetail.batch.current_scene_index)
+                  ?.error_message || '请选择后续操作'
+              }
+            />
+            <Space>
+              {activeBatchDetail.allowed_actions.includes('retry') && (
+                <Button type="primary" loading={decisionSubmitting} onClick={() => handleBatchDecision('retry')}>
+                  重试当前场景
+                </Button>
+              )}
+              {activeBatchDetail.allowed_actions.includes('skip') && (
+                <Button loading={decisionSubmitting} onClick={() => handleBatchDecision('skip')}>
+                  跳过并继续
+                </Button>
+              )}
+              {activeBatchDetail.allowed_actions.includes('abort') && (
+                <Button danger loading={decisionSubmitting} onClick={() => handleBatchDecision('abort')}>
+                  终止整批
+                </Button>
+              )}
+            </Space>
+          </>
+        )}
+      </Modal>
     </div>
   );
 };

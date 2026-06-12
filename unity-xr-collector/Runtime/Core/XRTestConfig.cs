@@ -92,6 +92,30 @@ namespace XRDataCollector.Core
         [Tooltip("后端测试任务 ID")]
         public int testTaskId = 0;
 
+        [Tooltip("实时进度接收任务 ID；为 0 时使用 testTaskId")]
+        public int progressTaskId = 0;
+
+        [Tooltip("运行模式")]
+        public string runMode = "single_scene";
+
+        [Tooltip("多场景批次 ID")]
+        public int batchId = 0;
+
+        [Tooltip("多场景批次项 ID")]
+        public int batchItemId = 0;
+
+        [Tooltip("当前场景索引")]
+        public int sceneIndex = 0;
+
+        [Tooltip("场景总数")]
+        public int sceneTotal = 0;
+
+        [Tooltip("当前尝试次数")]
+        public int attempt = 1;
+
+        [Tooltip("场景展示名称")]
+        public string sceneDisplayName = "";
+
         [Tooltip("命令行测试结束后退出 Unity Editor")]
         public bool quitOnComplete = false;
 

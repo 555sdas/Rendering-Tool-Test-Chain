@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
 using UnityEngine;
@@ -97,8 +98,11 @@ namespace XRDataCollector.Network
                 return;
             }
 
-            LogUploadSummary(samples, session, config.uploadUrl);
-            host.StartCoroutine(AutoSyncCoroutine(samples, session, config, callback));
+            // Authentication/session setup yields before the payload is built. Keep a
+            // snapshot so a subsequent collection or shutdown cannot clear this upload.
+            var sampleSnapshot = new List<PerformanceSample>(samples);
+            LogUploadSummary(sampleSnapshot, session, config.uploadUrl);
+            host.StartCoroutine(AutoSyncCoroutine(sampleSnapshot, session, config, callback));
         }
 
         public void LoadProjectsAsync(XRTestConfig config, Action<List<PlatformProject>, string> callback)
@@ -193,7 +197,12 @@ namespace XRDataCollector.Network
                 }
                 else
                 {
-                    Debug.LogError($"[TestDataUploader] 上传失败：{request.error}");
+                    string responseText = request.downloadHandler != null
+                        ? request.downloadHandler.text
+                        : string.Empty;
+                    Debug.LogError(
+                        $"[TestDataUploader] 上传失败：HTTP {request.responseCode} {request.error}，" +
+                        $"URL={url}，响应={responseText}");
                     success = false;
                 }
                 callback?.Invoke(success);
@@ -440,7 +449,7 @@ namespace XRDataCollector.Network
         {
             var sb = new StringBuilder();
             sb.AppendLine("{");
-            sb.AppendLine("  \"uploadTime\": \"" + DateTime.UtcNow.ToString("O") + "\",");
+            sb.AppendLine("  \"uploadTime\": \"" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) + "\",");
 
             if (session != null)
             {
@@ -451,8 +460,8 @@ namespace XRDataCollector.Network
                 sb.AppendLine($"    \"sessionId\": \"{session.SessionId}\",");
                 sb.AppendLine($"    \"platformSessionId\": {session.PlatformSessionId},");
                 sb.AppendLine($"    \"sessionName\": \"{EscapeJson(session.SessionName)}\",");
-                sb.AppendLine($"    \"startTime\": \"{session.StartTime:O}\",");
-                sb.AppendLine($"    \"duration\": {session.ElapsedTime.TotalSeconds:F3},");
+                sb.AppendLine($"    \"startTime\": \"{session.StartTime.ToString("O", CultureInfo.InvariantCulture)}\",");
+                sb.AppendLine($"    \"duration\": {JsonNumber(session.ElapsedTime.TotalSeconds, 3)},");
                 sb.AppendLine($"    \"unityVersion\": \"{EscapeJson(session.UnityVersion)}\",");
                 sb.AppendLine($"    \"productName\": \"{EscapeJson(session.ProductName)}\",");
                 sb.AppendLine($"    \"appVersion\": \"{EscapeJson(session.AppVersion)}\",");
@@ -476,19 +485,19 @@ namespace XRDataCollector.Network
             {
                 var s = samples[i];
                 sb.AppendLine("    {");
-                sb.AppendLine($"      \"timestamp\": \"{s.timestamp:O}\",");
-                sb.AppendLine($"      \"elapsedTime\": {s.elapsedTime.TotalSeconds:F3},");
+                sb.AppendLine($"      \"timestamp\": \"{s.timestamp.ToString("O", CultureInfo.InvariantCulture)}\",");
+                sb.AppendLine($"      \"elapsedTime\": {JsonNumber(s.elapsedTime.TotalSeconds, 3)},");
                 sb.AppendLine($"      \"collectionPhase\": \"{EscapeJson(s.collectionPhase)}\",");
 
                 if (s.collectionPhase == "frame_rate")
                 {
-                    sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
-                    sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
+                    sb.AppendLine($"      \"frameRate\": {JsonNumber(s.frameRate, 2)},");
+                    sb.AppendLine($"      \"frameTimeMs\": {JsonNumber(s.frameTimeMs, 3)},");
                 }
                 else if (s.collectionPhase == "metrics")
                 {
-                    sb.AppendLine($"      \"frameRate\": {s.frameRate:F2},");
-                    sb.AppendLine($"      \"frameTimeMs\": {s.frameTimeMs:F3},");
+                    sb.AppendLine($"      \"frameRate\": {JsonNumber(s.frameRate, 2)},");
+                    sb.AppendLine($"      \"frameTimeMs\": {JsonNumber(s.frameTimeMs, 3)},");
                 }
 
                 AppendPerformanceMetrics(sb, s);
@@ -507,16 +516,16 @@ namespace XRDataCollector.Network
 
         private void AppendPerformanceMetrics(StringBuilder sb, PerformanceSample s)
         {
-            sb.AppendLine($"      \"cpuUsagePercent\": {s.cpuUsagePercent:F2},");
-            sb.AppendLine($"      \"gpuUsagePercent\": {s.gpuUsagePercent:F2},");
+            sb.AppendLine($"      \"cpuUsagePercent\": {JsonNumber(s.cpuUsagePercent, 2)},");
+            sb.AppendLine($"      \"gpuUsagePercent\": {JsonNumber(s.gpuUsagePercent, 2)},");
             sb.AppendLine($"      \"drawCalls\": {s.drawCalls},");
             sb.AppendLine($"      \"triangles\": {s.triangles},");
             sb.AppendLine($"      \"vertices\": {s.vertices},");
-            sb.AppendLine($"      \"totalMemoryMB\": {s.totalMemoryMB:F2},");
-            sb.AppendLine($"      \"managedMemoryMB\": {s.managedMemoryMB:F2},");
-            sb.AppendLine($"      \"graphicsMemoryMB\": {s.graphicsMemoryMB:F2},");
-            sb.AppendLine($"      \"textureMemoryMB\": {s.textureMemoryMB:F2},");
-            sb.AppendLine($"      \"renderTextureMemoryMB\": {s.renderTextureMemoryMB:F2},");
+            sb.AppendLine($"      \"totalMemoryMB\": {JsonNumber(s.totalMemoryMB, 2)},");
+            sb.AppendLine($"      \"managedMemoryMB\": {JsonNumber(s.managedMemoryMB, 2)},");
+            sb.AppendLine($"      \"graphicsMemoryMB\": {JsonNumber(s.graphicsMemoryMB, 2)},");
+            sb.AppendLine($"      \"textureMemoryMB\": {JsonNumber(s.textureMemoryMB, 2)},");
+            sb.AppendLine($"      \"renderTextureMemoryMB\": {JsonNumber(s.renderTextureMemoryMB, 2)},");
             AppendDeviceInfo(sb, s.deviceInfo);
             sb.AppendLine("      \"renderQuality\": {");
             sb.AppendLine($"        \"active_light_count\": {s.activeLightCount},");
@@ -577,9 +586,44 @@ namespace XRDataCollector.Network
 
         private string EscapeJson(string value)
         {
-            if (string.IsNullOrEmpty(value)) return "";
-            return value.Replace("\\", "\\\\").Replace("\"", "\\\"")
-                        .Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+            if (string.IsNullOrEmpty(value))
+                return "";
+
+            var sb = new StringBuilder(value.Length + 8);
+            foreach (char character in value)
+            {
+                switch (character)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"': sb.Append("\\\""); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (character < 32)
+                            sb.Append("\\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                        else
+                            sb.Append(character);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private string JsonNumber(float value, int decimals)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value)
+                ? "0"
+                : value.ToString("F" + decimals, CultureInfo.InvariantCulture);
+        }
+
+        private string JsonNumber(double value, int decimals)
+        {
+            return double.IsNaN(value) || double.IsInfinity(value)
+                ? "0"
+                : value.ToString("F" + decimals, CultureInfo.InvariantCulture);
         }
 
         private string ExtractStringField(string json, string field)

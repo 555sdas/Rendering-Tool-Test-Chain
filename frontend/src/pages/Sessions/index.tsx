@@ -28,6 +28,7 @@ import { reportsApi, saveReportBlob, type ReportFormat } from '@/api/reports';
 import type { TestSession } from '@/types';
 import { sessionsApi } from '@/api/sessions';
 import { formatDateTime, getApiDateTime } from '@/lib/datetime';
+import { getSessionSceneLabel } from '@/lib/sessionScene';
 
 const { Option } = Select;
 const { TabPane } = Tabs;
@@ -243,6 +244,7 @@ const Sessions: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [runModeFilter, setRunModeFilter] = useState<string>('');
   const [selectedSession, setSelectedSession] = useState<TestSession | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -267,7 +269,7 @@ const Sessions: React.FC = () => {
         system_memory_mb: systemMemoryMb,
       },
       scene_info: {
-        scene_name: getConfigString(session.config, ['scene_name'], `场景 ${session.scene_id || '-'}`),
+        scene_name: getSessionSceneLabel(session),
         complexity: (session.config?.['complexity'] as NonNullable<TestSession['scene_info']>['complexity']) || 'medium',
         render_pipeline: getConfigString(session.config, ['render_pipeline'], 'URP'),
       },
@@ -294,9 +296,13 @@ const Sessions: React.FC = () => {
   }, [loadSessions]);
 
   const filteredSessions = sessions.filter((s) => {
-    const matchSearch = (s.task_name || s.name || '').toLowerCase().includes(searchText.toLowerCase());
+    const normalizedSearch = searchText.toLowerCase();
+    const matchSearch = (s.task_name || s.name || '').toLowerCase().includes(normalizedSearch)
+      || getSessionSceneLabel(s).toLowerCase().includes(normalizedSearch);
     const matchStatus = statusFilter ? s.status === statusFilter : true;
-    return matchSearch && matchStatus;
+    const runMode = String(s.config?.['run_mode'] || 'single_scene');
+    const matchRunMode = runModeFilter ? runMode === runModeFilter : true;
+    return matchSearch && matchStatus && matchRunMode;
   });
 
   const handleViewDetail = (session: TestSession) => {
@@ -343,10 +349,34 @@ const Sessions: React.FC = () => {
 
   const columns = [
     {
-      title: '任务名称',
+      title: '会话',
       dataIndex: 'task_name',
       key: 'task_name',
       render: (_text: string, record: TestSession) => <strong>{record.task_name || record.name}</strong>,
+    },
+    {
+      title: '测试场景',
+      key: 'scene_display_name',
+      render: (_: unknown, record: TestSession) => (
+        <Tag color="geekblue">{getSessionSceneLabel(record)}</Tag>
+      ),
+    },
+    {
+      title: '运行模式',
+      key: 'run_mode',
+      render: (_: unknown, record: TestSession) => {
+        const isMultiScene = record.config?.['run_mode'] === 'multi_scene';
+        const batchId = getConfigNumber(record.config, ['batch_id']);
+        const sceneIndex = getConfigNumber(record.config, ['scene_index']);
+        const sceneTotal = getConfigNumber(record.config, ['scene_total']);
+        return isMultiScene ? (
+          <Space size={4}>
+            <Tag color="purple">多场景连续</Tag>
+            {batchId > 0 && <Tag>批次 #{batchId}</Tag>}
+            {sceneTotal > 0 && <span>{sceneIndex + 1}/{sceneTotal}</span>}
+          </Space>
+        ) : <Tag>单场景</Tag>;
+      },
     },
     {
       title: '状态',
@@ -377,16 +407,6 @@ const Sessions: React.FC = () => {
       dataIndex: 'device_info',
       key: 'cpu',
       render: (info: TestSession['device_info']) => info?.cpu_model || '-',
-    },
-    {
-      title: '场景复杂度',
-      dataIndex: 'scene_info',
-      key: 'complexity',
-      render: (info: TestSession['scene_info']) => (
-        <Tag color={info?.complexity === 'high' ? 'red' : info?.complexity === 'medium' ? 'orange' : 'green'}>
-          {info?.complexity === 'high' ? '高' : info?.complexity === 'medium' ? '中' : '低'}
-        </Tag>
-      ),
     },
     {
       title: '开始时间',
@@ -476,6 +496,16 @@ const Sessions: React.FC = () => {
             <Option value="completed">已完成</Option>
             <Option value="failed">失败</Option>
           </Select>
+          <Select
+            placeholder="筛选运行模式"
+            value={runModeFilter || undefined}
+            onChange={setRunModeFilter}
+            style={{ width: 160 }}
+            allowClear
+          >
+            <Option value="single_scene">单场景</Option>
+            <Option value="multi_scene">多场景连续</Option>
+          </Select>
         </Space>
       </Card>
 
@@ -506,8 +536,16 @@ const Sessions: React.FC = () => {
           <Tabs defaultActiveKey="info">
             <TabPane tab="基本信息" key="info">
               <Descriptions bordered column={2} size="small">
-                <Descriptions.Item label="任务名称" span={2}>
+                <Descriptions.Item label="会话" span={2}>
                   {selectedSession.task_name || selectedSession.name}
+                </Descriptions.Item>
+                <Descriptions.Item label="测试场景" span={2}>
+                  <Tag color="geekblue">{getSessionSceneLabel(selectedSession)}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="运行模式" span={2}>
+                  {selectedSession.config?.['run_mode'] === 'multi_scene'
+                    ? `多场景连续 / 批次 #${String(selectedSession.config?.['batch_id'] || '-')}`
+                    : '单场景'}
                 </Descriptions.Item>
                 <Descriptions.Item label="状态">
                   <Tag color={statusConfig[selectedSession.status]?.color}>

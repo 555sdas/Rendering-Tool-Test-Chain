@@ -160,9 +160,18 @@ def _merge_session_config(session: TestSession, updates: dict) -> None:
 
 
 def _session_response(session: TestSession) -> dict:
+    from app.utils.session_display import get_session_scene_display_name
+
+    scene_asset_name = session.scene.name if getattr(session, "scene", None) is not None else None
+    scene_display_name = get_session_scene_display_name(
+        config=session.config,
+        scene_id=session.scene_id,
+        scene_asset_name=scene_asset_name,
+    )
     return {
         "id": session.id,
         "name": session.name,
+        "scene_display_name": scene_display_name,
         "description": session.description,
         "status": session.status.value if hasattr(session.status, "value") else session.status,
         "device_model": session.device_model,
@@ -681,6 +690,11 @@ async def add_performance_samples_batch(
                 "xr_runtime": session.xr_runtime,
             },
         )
+
+    if session.status == TestSessionStatus.COMPLETED.value:
+        from app.services.unity_batch_service import UnityBatchService
+
+        UnityBatchService(db).on_scene_upload_completed(session)
 
     db.commit()
 

@@ -77,3 +77,31 @@
 .metric-scope-selector__help-icon:hover {
   color: #1677ff;
 }
+
+.metric-scope-selector__help-icon--special {
+  color: #d48806;
+}
+
+.metric-scope-selector__help-icon--special:hover {
+  color: #fa8c16;
+}
+
+.metric-scope-selector__tooltip-desc {
+  line-height: 1.5;
+}
+
+.metric-scope-selector__tooltip-notices {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.metric-scope-selector__tooltip-notice {
+  color: #ffe7ba;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.metric-scope-selector__tooltip-notice + .metric-scope-selector__tooltip-notice {
+  margin-top: 6px;
+}

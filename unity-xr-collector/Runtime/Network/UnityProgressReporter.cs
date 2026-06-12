@@ -41,13 +41,33 @@ namespace XRDataCollector.Network
         {
             requestInFlight = true;
             var sample = manager.BuildLiveProgressSample();
+            int progressTaskId = manager.Config.progressTaskId > 0
+                ? manager.Config.progressTaskId
+                : manager.Config.testTaskId;
+            float sceneProgress = manager.IsCollecting ? manager.CollectionProgress : 1f;
+            int sceneTotal = Math.Max(manager.Config.sceneTotal, 1);
+            float overallProgress = manager.Config.runMode == "multi_scene"
+                ? Mathf.Clamp01((manager.Config.sceneIndex + sceneProgress) / sceneTotal)
+                : sceneProgress;
             var payload = new ProgressPayload
             {
-                task_id = manager.Config.testTaskId,
+                task_id = progressTaskId,
                 session_id = manager.Config.platformSessionId,
                 phase = manager.IsCollecting ? (sample?.collectionPhase ?? "starting") : "uploading",
                 phase_label = manager.IsCollecting ? manager.CurrentCollectionPhase : "上传结果",
-                progress = manager.IsCollecting ? manager.CollectionProgress : 1f,
+                progress = sceneProgress,
+                run_mode = manager.Config.runMode,
+                batch_id = manager.Config.batchId,
+                batch_status = manager.Config.runMode == "multi_scene" ? "running" : "",
+                batch_item_id = manager.Config.batchItemId,
+                scene_index = manager.Config.sceneIndex,
+                scene_total = manager.Config.sceneTotal,
+                scene_display_name = manager.Config.sceneDisplayName,
+                scene_session_id = manager.Config.platformSessionId,
+                scene_task_id = manager.Config.testTaskId,
+                attempt = manager.Config.attempt,
+                scene_progress = sceneProgress,
+                overall_progress = overallProgress,
                 remaining_seconds = manager.CurrentPhaseRemainingSeconds,
                 sample_count = manager.GetSampleCount(),
                 fps = sample?.frameRate ?? 0f,
@@ -109,6 +129,18 @@ namespace XRDataCollector.Network
             public string phase;
             public string phase_label;
             public float progress;
+            public string run_mode;
+            public int batch_id;
+            public string batch_status;
+            public int batch_item_id;
+            public int scene_index;
+            public int scene_total;
+            public string scene_display_name;
+            public int scene_session_id;
+            public int scene_task_id;
+            public int attempt;
+            public float scene_progress;
+            public float overall_progress;
             public float remaining_seconds;
             public int sample_count;
             public float fps;

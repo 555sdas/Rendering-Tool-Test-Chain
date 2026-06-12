@@ -290,12 +290,29 @@ namespace XRDataCollector.Core
             if (playerManagerType != null)
             {
                 var instance = UnityEngine.Object.FindObjectOfType(playerManagerType);
-                if (instance != null)
+                if (instance != null && Application.isPlaying)
                 {
                     var restoreMethod = playerManagerType.GetMethod(
                         "EnableFirstPersonController",
                         BindingFlags.Instance | BindingFlags.Public);
-                    restoreMethod?.Invoke(instance, null);
+                    if (restoreMethod != null)
+                    {
+                        try
+                        {
+                            restoreMethod.Invoke(instance, null);
+                        }
+                        catch (TargetInvocationException exception)
+                        {
+                            string message = exception.InnerException?.Message ?? exception.Message;
+                            Debug.LogWarning(
+                                "[TestSceneFlythroughActivator] 恢复第一人称控制器失败，继续执行关闭清理：" + message);
+                        }
+                        catch (Exception exception)
+                        {
+                            Debug.LogWarning(
+                                "[TestSceneFlythroughActivator] 恢复第一人称控制器失败，继续执行关闭清理：" + exception.Message);
+                        }
+                    }
                 }
             }
 
@@ -305,7 +322,17 @@ namespace XRDataCollector.Core
                 if (director == null)
                     continue;
                 if (director.state == PlayState.Playing)
-                    director.Stop();
+                {
+                    try
+                    {
+                        director.Stop();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning(
+                            "[TestSceneFlythroughActivator] 停止 Timeline 失败，继续执行关闭清理：" + exception.Message);
+                    }
+                }
             }
         }
 

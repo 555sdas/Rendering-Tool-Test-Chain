@@ -4,6 +4,7 @@ import type { TestSession as UiTestSession } from '@/types';
 export interface TestSession {
   id: number;
   name: string;
+  scene_display_name?: string | null;
   description: string | null;
   status: UiTestSession['status'];
   device_model: string | null;

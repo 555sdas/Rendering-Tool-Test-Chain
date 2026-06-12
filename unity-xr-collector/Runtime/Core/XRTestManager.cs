@@ -263,6 +263,11 @@ namespace XRDataCollector.Core
             if (allCollectors.Count == 0) InitializeCollectors();
             if (isCollecting) return;
 
+            // Multi-scene runs can reuse this manager when Enter Play Mode has
+            // scene reload disabled. PrepareForShutdown disables it after the
+            // previous scene, so restore Update before starting the next run.
+            enabled = true;
+
             if (config.enableNetworkUpload)
                 TestDataUploader.EnsureRuntimeHost();
 
@@ -309,8 +314,16 @@ namespace XRDataCollector.Core
             OnSessionStopped?.Invoke();
             Debug.Log($"[XRTestManager] 会话 '{config.sessionName}' 已停止。共采集样本数：{samples.Count}");
 
-            if (uploadResults && config.enableNetworkUpload && samples.Count > 0)
-                UploadData("", null);
+            if (uploadResults && config.enableNetworkUpload)
+            {
+                if (samples.Count > 0)
+                    UploadData("", null);
+                else
+                {
+                    Debug.LogError("[XRTestManager] 采集结束但没有生成任何样本，无法上传。");
+                    NotifyDataUploaded(false);
+                }
+            }
         }
 
         public void ExportData(IDataExporter exporter, string filePath)
@@ -412,6 +425,7 @@ namespace XRDataCollector.Core
             var reporter = GetComponent<UnityProgressReporter>();
             if (reporter == null)
                 reporter = gameObject.AddComponent<UnityProgressReporter>();
+            reporter.enabled = true;
             reporter.Initialize(this);
         }
 
@@ -469,7 +483,14 @@ namespace XRDataCollector.Core
             if (reporter != null)
                 reporter.enabled = false;
 
-            TestSceneFlythroughActivator.StopPresentation();
+            try
+            {
+                TestSceneFlythroughActivator.StopPresentation();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[XRTestManager] 停止场景演示失败，已忽略并继续关闭：" + exception.Message);
+            }
         }
 
         private void DisposeAllCollectors()
