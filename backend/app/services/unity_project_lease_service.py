@@ -37,6 +37,40 @@ class UnityProjectLeaseService:
             self.db.flush()
         return len(rows)
 
+    def purge_inactive(self) -> int:
+        """Remove leases whose persisted owner has already reached a terminal state."""
+        from app.models.test_batch import TestBatch, TestBatchStatus
+        from app.models.test_task import TestTask, TestTaskStatus
+
+        terminal_task_statuses = {
+            TestTaskStatus.COMPLETED.value,
+            TestTaskStatus.FAILED.value,
+            TestTaskStatus.CANCELLED.value,
+        }
+        terminal_batch_statuses = {
+            TestBatchStatus.COMPLETED.value,
+            TestBatchStatus.PARTIAL_COMPLETED.value,
+            TestBatchStatus.FAILED.value,
+            TestBatchStatus.CANCELLED.value,
+        }
+        rows = self.db.query(UnityProjectLease).all()
+        stale: list[UnityProjectLease] = []
+        for row in rows:
+            if row.owner_type == "single_scene":
+                task = self.db.query(TestTask).filter(TestTask.id == row.owner_id).first()
+                if task is None or task.status in terminal_task_statuses:
+                    stale.append(row)
+            elif row.owner_type == "multi_scene":
+                batch = self.db.query(TestBatch).filter(TestBatch.id == row.owner_id).first()
+                if batch is None or batch.status in terminal_batch_statuses:
+                    stale.append(row)
+
+        for row in stale:
+            self.db.delete(row)
+        if stale:
+            self.db.flush()
+        return len(stale)
+
     def acquire(
         self,
         *,
@@ -47,6 +81,7 @@ class UnityProjectLeaseService:
         lease_hours: int = DEFAULT_LEASE_HOURS,
     ) -> UnityProjectLease:
         self.purge_expired()
+        self.purge_inactive()
         normalized = self.normalize_project_path(project_path)
         key = self.project_key(normalized)
         existing = self.db.query(UnityProjectLease).filter(UnityProjectLease.project_key == key).first()

@@ -86,6 +86,94 @@ class UnityRunnerService:
             ]
         return [self._public_scene(item) for item in scenes]
 
+    def list_active_runs(self) -> list[dict[str, Any]]:
+        active_task_statuses = [
+            TestTaskStatus.PENDING.value,
+            TestTaskStatus.QUEUED.value,
+            TestTaskStatus.RUNNING.value,
+        ]
+        rows: list[dict[str, Any]] = []
+        tasks = (
+            self.db.query(TestTask)
+            .filter(TestTask.task_type == "unity_local_render_test")
+            .filter(TestTask.status.in_(active_task_statuses))
+            .order_by(TestTask.created_at.desc())
+            .all()
+        )
+        for task in tasks:
+            session = self._find_task_session(task)
+            self._sync_completed_task_from_session(task, session)
+            self._sync_stale_task(task, session)
+            if self._task_status_value(task.status) not in active_task_statuses:
+                continue
+            config = dict(task.config or {})
+            latest = dict(task.result_summary or {}).get("latest_progress") or {}
+            rows.append(
+                {
+                    "run_mode": "single_scene",
+                    "project_id": task.project_id,
+                    "project_name": task.project.name if task.project else None,
+                    "task_id": task.id,
+                    "session_id": session.id if session else self._int_or_none(config.get("platform_session_id")),
+                    "batch_id": None,
+                    "status": self._task_status_value(task.status),
+                    "scene_name": config.get("scene_resource_name") or config.get("unity_scene_path"),
+                    "scene_index": 0,
+                    "scene_total": 1,
+                    "progress": float(latest.get("progress") or 0),
+                    "phase_label": latest.get("phase_label") or "等待 Unity 上报",
+                    "remaining_seconds": float(latest.get("remaining_seconds") or 0),
+                    "started_at": task.started_at.isoformat() if task.started_at else None,
+                }
+            )
+
+        from app.models.test_batch import TestBatch, TestBatchStatus
+
+        active_batch_statuses = [
+            TestBatchStatus.PENDING.value,
+            TestBatchStatus.RUNNING.value,
+            TestBatchStatus.AWAITING_USER_DECISION.value,
+        ]
+        batches = (
+            self.db.query(TestBatch)
+            .filter(TestBatch.status.in_(active_batch_statuses))
+            .order_by(TestBatch.created_at.desc())
+            .all()
+        )
+        for batch in batches:
+            parent_task = self.db.query(TestTask).filter(TestTask.id == batch.parent_task_id).first()
+            if not parent_task:
+                continue
+            latest = dict(batch.result_summary or {}).get("latest_progress") or {}
+            current_item = next((item for item in batch.items if item.scene_index == batch.current_scene_index), None)
+            rows.append(
+                {
+                    "run_mode": "multi_scene",
+                    "project_id": batch.project_id,
+                    "project_name": parent_task.project.name if parent_task.project else None,
+                    "task_id": parent_task.id,
+                    "session_id": current_item.current_session_id if current_item else None,
+                    "batch_id": batch.id,
+                    "status": batch.status,
+                    "scene_name": current_item.scene_display_name if current_item else None,
+                    "scene_index": batch.current_scene_index,
+                    "scene_total": batch.scene_total,
+                    "progress": float(
+                        latest.get("overall_progress")
+                        or dict(batch.result_summary or {}).get("overall_progress")
+                        or 0
+                    ),
+                    "phase_label": latest.get("phase_label") or (
+                        "等待用户决策"
+                        if batch.status == TestBatchStatus.AWAITING_USER_DECISION.value
+                        else "等待 Unity 上报"
+                    ),
+                    "remaining_seconds": float(latest.get("remaining_seconds") or 0),
+                    "started_at": batch.started_at.isoformat() if batch.started_at else None,
+                }
+            )
+        return sorted(rows, key=lambda row: row.get("started_at") or "", reverse=True)
+
     def get_test_metrics_catalog(self) -> dict[str, Any]:
         return TestScopeService.get_catalog()
 
@@ -1005,6 +1093,23 @@ class UnityRunnerService:
             .filter(TestSession.config["test_task_id"].as_integer() == task.id)
             .first()
         )
+
+    def on_session_upload_completed(self, session: TestSession) -> None:
+        """Finalize a single-scene task as soon as its result upload completes."""
+        config = dict(session.config or {})
+        task_id = self._int_or_none(config.get("test_task_id"))
+        if not task_id:
+            return
+        task = self.db.query(TestTask).filter(TestTask.id == task_id).first()
+        if not task:
+            return
+        task_config = dict(task.config or {})
+        if task_config.get("run_mode") == "multi_scene":
+            return
+        expected_session_id = self._int_or_none(task_config.get("platform_session_id"))
+        if expected_session_id and expected_session_id != session.id:
+            return
+        self._sync_completed_task_from_session(task, session)
 
     def _sync_completed_task_from_session(self, task: TestTask, session: TestSession | None) -> None:
         if not session:

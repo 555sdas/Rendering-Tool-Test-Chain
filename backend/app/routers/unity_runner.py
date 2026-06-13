@@ -53,6 +53,14 @@ class UnityTestStartRequest(BaseModel):
     ensure_plugin: bool = True
 
 
+@router.get("/active-runs")
+async def list_active_unity_runs(
+    current_user: User = Depends(require_permission(Permission.TEST_VIEW)),
+    db: Session = Depends(get_db),
+):
+    return {"items": UnityRunnerService(db).list_active_runs()}
+
+
 @router.get("/test-metrics/catalog")
 async def get_test_metrics_catalog(
     current_user: User = Depends(require_permission(Permission.TEST_VIEW)),

@@ -1,0 +1,60 @@
+.global-unity-progress {
+  display: grid;
+  grid-template-columns: minmax(220px, auto) minmax(260px, 1fr) auto;
+  gap: 20px;
+  align-items: center;
+  margin: 14px 24px 0;
+  padding: 12px 16px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.12);
+}
+
+.global-unity-progress__summary,
+.global-unity-progress__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.global-unity-progress__icon {
+  color: #1677ff;
+  font-size: 20px;
+}
+
+.global-unity-progress__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.global-unity-progress__text span {
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-unity-progress__bar .ant-progress {
+  min-width: 160px;
+  margin: 0;
+}
+
+.global-unity-progress__bar span {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .global-unity-progress {
+    grid-template-columns: 1fr auto;
+  }
+
+  .global-unity-progress__bar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

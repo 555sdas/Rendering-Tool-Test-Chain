@@ -1,6 +1,8 @@
 import type { TestSession } from '@/api/sessions';
 import { getApiDateTime } from '@/lib/datetime';
 
+export type HistoryViewMode = 'single' | 'multi';
+
 export interface MultiSceneBatchGroup {
   batchId: number;
   sessions: TestSession[];
@@ -22,6 +24,22 @@ function configNumber(config: Record<string, unknown> | null | undefined, key: s
 function isMultiSceneSession(session: TestSession): boolean {
   const config = session.config || {};
   return config.run_mode === 'multi_scene' && configNumber(config, 'batch_id', 0) > 0;
+}
+
+export function parseHistoryViewParam(value: string | null): HistoryViewMode {
+  return value === 'multi' ? 'multi' : 'single';
+}
+
+export function buildProjectHistoryReturnPath(projectId: number, view: HistoryViewMode = 'single'): string {
+  const params = new URLSearchParams({ tab: 'history' });
+  if (view === 'multi') {
+    params.set('historyView', 'multi');
+  }
+  return `/projects/${projectId}?${params.toString()}`;
+}
+
+export function sessionHistoryView(session: TestSession): HistoryViewMode {
+  return isMultiSceneSession(session) ? 'multi' : 'single';
 }
 
 function sortBatchSessions(sessions: TestSession[]): TestSession[] {

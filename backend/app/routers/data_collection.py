@@ -693,7 +693,9 @@ async def add_performance_samples_batch(
 
     if session.status == TestSessionStatus.COMPLETED.value:
         from app.services.unity_batch_service import UnityBatchService
+        from app.services.unity_runner_service import UnityRunnerService
 
+        UnityRunnerService(db).on_session_upload_completed(session)
         UnityBatchService(db).on_scene_upload_completed(session)
 
     db.commit()

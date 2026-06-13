@@ -57,6 +57,12 @@ import MultiSceneOrchestrationPanel from '@/components/MultiSceneOrchestrationPa
 import MultiSceneBatchMonitor from '@/components/MultiSceneBatchMonitor';
 import MultiSceneBatchResults from '@/components/MultiSceneBatchResults';
 import SessionHistoryList from '@/components/SessionHistoryList';
+import {
+  buildProjectHistoryReturnPath,
+  parseHistoryViewParam,
+  sessionHistoryView,
+  type HistoryViewMode,
+} from '@/lib/sessionHistory';
 import type { SceneRunDraft } from '@/components/MultiSceneOrchestrationPanel/types';
 import { unityBatchesApi, type UnityBatchDetail } from '@/api/unityBatches';
 import './ProjectDetail.css';
@@ -88,6 +94,17 @@ function isCollectingProgress(progress: UnityRealtimeProgress): boolean {
 
 function isUploadingProgress(progress: UnityRealtimeProgress): boolean {
   return progress.phase === 'uploading' || progress.phase_label === '上传结果';
+}
+
+function findActiveSingleSceneSession(sessions: TestSession[]): TestSession | null {
+  return sessions.find((session) => {
+    const config = session.config || {};
+    return (
+      RUNNING_SESSION_STATUSES.has(session.status) &&
+      config.run_mode !== 'multi_scene' &&
+      (config.source === 'web_unity_runner' || Boolean(config.test_task_id))
+    );
+  }) ?? null;
 }
 
 interface ActiveUnityRun {
@@ -296,12 +313,27 @@ const ProjectDetail: React.FC = () => {
     started: false,
     ended: false,
   });
+  const batchNotifyRef = useRef<{
+    batchId: number | null;
+    sceneIndex: number | null;
+    ended: boolean;
+  }>({
+    batchId: null,
+    sceneIndex: null,
+    ended: false,
+  });
   const [taskError, setTaskError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [realtimeProgress, setRealtimeProgress] = useState<UnityRealtimeProgress | null>(null);
   const [realtimeConnection, setRealtimeConnection] = useState<'connecting' | 'live' | 'polling'>('connecting');
   const [now, setNow] = useState(Date.now());
   const [activeTab, setActiveTab] = useState(() => (searchParams.get('tab') === 'history' ? 'history' : 'unity'));
+  const historyView = parseHistoryViewParam(searchParams.get('historyView'));
+
+  useEffect(() => {
+    const tabFromUrl = searchParams.get('tab') === 'history' ? 'history' : 'unity';
+    setActiveTab(tabFromUrl);
+  }, [searchParams]);
 
   const handleTabChange = (key: string) => {
     setActiveTab(key);
@@ -310,8 +342,28 @@ const ProjectDetail: React.FC = () => {
         const next = new URLSearchParams(prev);
         if (key === 'unity') {
           next.delete('tab');
+          next.delete('historyView');
         } else {
           next.set('tab', key);
+          if (key !== 'history') {
+            next.delete('historyView');
+          }
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const handleHistoryViewChange = (view: HistoryViewMode) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', 'history');
+        if (view === 'multi') {
+          next.set('historyView', 'multi');
+        } else {
+          next.delete('historyView');
         }
         return next;
       },
@@ -379,9 +431,23 @@ const ProjectDetail: React.FC = () => {
             setActiveBatchDetail(activeBatch.data.item);
             setShowUnityConfig(false);
             setRunMode('multi');
+          } else {
+            const runningSession = findActiveSingleSceneSession(sessionsData.items || []);
+            if (runningSession) {
+              setActiveRun(createActiveRunFromSession(runningSession));
+              setActiveRunScope(inferScopeFromSessionConfig(runningSession.config || {}));
+              setShowUnityConfig(false);
+              setRunMode('single');
+            }
           }
         } catch {
-          // 活动批次查询失败时不阻断页面加载
+          const runningSession = findActiveSingleSceneSession(sessionsData.items || []);
+          if (runningSession) {
+            setActiveRun(createActiveRunFromSession(runningSession));
+            setActiveRunScope(inferScopeFromSessionConfig(runningSession.config || {}));
+            setShowUnityConfig(false);
+            setRunMode('single');
+          }
         }
       } catch {
         message.error('获取项目详情失败');
@@ -410,26 +476,20 @@ const ProjectDetail: React.FC = () => {
         return updatedRun;
       }
 
-      if (showUnityConfig) return null;
-
-      const runningSession = sessions.find((session) => {
-        const config = session.config || {};
-        const startedAt = getApiDateTime(session.started_at);
-        const expectedSeconds =
-          getConfigNumber(config, 'frame_rate_duration_seconds', 30) +
-          getConfigNumber(config, 'metrics_duration_seconds', 30) +
-          180;
-        const isRecent = startedAt !== null && Date.now() - startedAt <= expectedSeconds * 1000;
-        return (
-          RUNNING_SESSION_STATUSES.has(session.status) &&
-          isRecent &&
-          (config.source === 'web_unity_runner' || Boolean(config.test_task_id))
-        );
-      });
+      const runningSession = findActiveSingleSceneSession(sessions);
 
       return runningSession ? createActiveRunFromSession(runningSession) : null;
     });
-  }, [sessions, showUnityConfig]);
+  }, [sessions]);
+
+  useEffect(() => {
+    if (!activeRun || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
+    setShowUnityConfig(false);
+    setRunMode('single');
+    setActiveRunScope(inferScopeFromSessionConfig(
+      sessions.find((session) => session.id === activeRun.sessionId)?.config || {},
+    ));
+  }, [activeRun, sessions]);
 
   useEffect(() => {
     if (!activeRun || TERMINAL_SESSION_STATUSES.has(activeRun.status)) return;
@@ -674,6 +734,58 @@ const ProjectDetail: React.FC = () => {
   }, [activeRun, activeRun?.status, activeRun?.sessionName, activeRun?.taskId, taskError]);
 
   useEffect(() => {
+    if (!activeBatchDetail) return;
+    const { batch, items } = activeBatchDetail;
+    const currentIndex = realtimeProgress?.scene_index ?? batch.current_scene_index;
+    const currentItem = items.find((item) => item.scene_index === currentIndex);
+    const tracker = batchNotifyRef.current;
+
+    if (tracker.batchId !== batch.id) {
+      batchNotifyRef.current = {
+        batchId: batch.id,
+        sceneIndex: currentIndex,
+        ended: TERMINAL_BATCH_STATUSES.has(batch.status),
+      };
+      if (!TERMINAL_BATCH_STATUSES.has(batch.status)) {
+        notification.success({
+          message: '多场景测试已开始',
+          description: `编排 #${batch.id}，共 ${batch.scene_total} 个场景，当前执行 ${currentItem?.scene_display_name || `场景 ${currentIndex + 1}`}。`,
+          placement: 'topRight',
+          duration: 6,
+        });
+      }
+      return;
+    }
+
+    if (
+      !TERMINAL_BATCH_STATUSES.has(batch.status) &&
+      tracker.sceneIndex !== null &&
+      currentIndex !== tracker.sceneIndex
+    ) {
+      batchNotifyRef.current.sceneIndex = currentIndex;
+      notification.info({
+        message: '正在切换测试场景',
+        description: `即将执行场景 ${currentIndex + 1}/${batch.scene_total}：${currentItem?.scene_display_name || '-'}`,
+        placement: 'topRight',
+        duration: 6,
+      });
+    }
+
+    if (TERMINAL_BATCH_STATUSES.has(batch.status) && !tracker.ended) {
+      batchNotifyRef.current.ended = true;
+      const completedCount = items.filter((item) => item.status === 'completed').length;
+      const description = `编排 #${batch.id} 已结束，完成 ${completedCount}/${batch.scene_total} 个场景。`;
+      if (batch.status === 'completed') {
+        notification.success({ message: '多场景测试已完成', description, placement: 'topRight', duration: 7 });
+      } else if (batch.status === 'cancelled') {
+        notification.warning({ message: '多场景测试已终止', description, placement: 'topRight', duration: 7 });
+      } else {
+        notification.error({ message: '多场景测试已结束', description, placement: 'topRight', duration: 8 });
+      }
+    }
+  }, [activeBatchDetail, realtimeProgress?.scene_index]);
+
+  useEffect(() => {
     if (activeRun?.status === 'completed') {
       setResultSessionId(activeRun.sessionId);
     }
@@ -781,6 +893,7 @@ const ProjectDetail: React.FC = () => {
         })),
       });
       setActiveBatchDetail(result.data);
+      batchNotifyRef.current = { batchId: null, sceneIndex: null, ended: false };
       setShowUnityConfig(false);
       setTaskLogs([]);
       setTaskError(null);
@@ -816,7 +929,7 @@ const ProjectDetail: React.FC = () => {
   const handleBatchDecision = async (action: 'retry' | 'skip' | 'abort') => {
     if (!activeBatchDetail) return;
     const waitingItem = activeBatchDetail.items.find(
-      (item) => item.status === 'awaiting_user_decision' || item.scene_index === activeBatchDetail.batch.current_scene_index,
+      (item) => item.status === 'awaiting_user_decision',
     );
     if (!waitingItem) {
       message.error('未找到待处理的场景项');
@@ -864,6 +977,7 @@ const ProjectDetail: React.FC = () => {
     setResultSessionId(null);
     setRealtimeConnection('connecting');
     collectionNotifyRef.current = { taskId: null, started: false, ended: false };
+    batchNotifyRef.current = { batchId: null, sceneIndex: null, ended: false };
   };
 
   const handleStopUnityTest = async () => {
@@ -1374,11 +1488,15 @@ const ProjectDetail: React.FC = () => {
                   </div>
                   <SessionHistoryList
                     sessions={sessions}
-                    onAnalyze={(sessionId) =>
+                    historyView={historyView}
+                    onHistoryViewChange={handleHistoryViewChange}
+                    onAnalyze={(sessionId, context) => {
+                      const session = sessions.find((item) => item.id === sessionId);
+                      const returnView = context?.historyView ?? (session ? sessionHistoryView(session) : historyView);
                       navigate(`/analysis?sessionId=${sessionId}&projectId=${project.id}`, {
-                        state: { returnTo: `/projects/${project.id}?tab=history` },
-                      })
-                    }
+                        state: { returnTo: buildProjectHistoryReturnPath(project.id, returnView) },
+                      });
+                    }}
                   />
                 </>
               ),

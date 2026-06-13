@@ -162,6 +162,23 @@ export interface UnityRealtimeProgress {
   message?: string;
 }
 
+export interface ActiveUnityRunSummary {
+  run_mode: 'single_scene' | 'multi_scene';
+  project_id: number;
+  project_name: string | null;
+  task_id: number;
+  session_id: number | null;
+  batch_id: number | null;
+  status: string;
+  scene_name: string | null;
+  scene_index: number;
+  scene_total: number;
+  progress: number;
+  phase_label: string;
+  remaining_seconds: number;
+  started_at: string | null;
+}
+
 export function createUnityProgressWebSocket(taskId: number): WebSocket {
   const apiBase = import.meta.env.VITE_API_BASE_URL || '/api/v1';
   const baseUrl = new URL(apiBase, window.location.origin);
@@ -172,6 +189,11 @@ export function createUnityProgressWebSocket(taskId: number): WebSocket {
 }
 
 export const unityRunnerApi = {
+  listActiveRuns: async (): Promise<ActiveUnityRunSummary[]> => {
+    const response = await apiClient.get<{ items: ActiveUnityRunSummary[] }>('/unity-runner/active-runs');
+    return response.data.items;
+  },
+
   getTestMetricsCatalog: async (): Promise<MetricCatalog> => {
     const response = await apiClient.get<MetricCatalog>('/unity-runner/test-metrics/catalog');
     return response.data;

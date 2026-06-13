@@ -25,6 +25,7 @@ import { analysisApi, type FullReport } from '@/api/analysis';
 import { reportsApi, saveReportBlob, type ReportFormat } from '@/api/reports';
 import { sessionsApi, type TestSession } from '@/api/sessions';
 import { getSessionSceneLabel } from '@/lib/sessionScene';
+import { buildProjectHistoryReturnPath, sessionHistoryView } from '@/lib/sessionHistory';
 import {
   buildFrameQualityPieData,
   buildFrameTimeHistogram,
@@ -59,9 +60,7 @@ const Analysis: React.FC = () => {
   const projectId = projectIdParam ? Number(projectIdParam) : undefined;
   const projectFilterId = projectId && Number.isFinite(projectId) ? projectId : undefined;
   const sessionId = sessionIdParam ? Number(sessionIdParam) : NaN;
-  const returnTo =
-    (location.state as { returnTo?: string } | null)?.returnTo ??
-    (projectFilterId ? `/projects/${projectFilterId}` : '/projects');
+  const stateReturnTo = (location.state as { returnTo?: string } | null)?.returnTo;
   const [fullReport, setFullReport] = useState<FullReport | null>(null);
   const [currentSession, setCurrentSession] = useState<TestSession | null>(null);
   const [sampleChartData, setSampleChartData] = useState<SampleChartPoint[]>([]);
@@ -101,6 +100,19 @@ const Analysis: React.FC = () => {
   const canExportReport = Number.isFinite(sessionId);
   const currentSessionName = currentSession?.name || fullReport?.session_info?.name;
   const currentSceneLabel = currentSession ? getSessionSceneLabel(currentSession) : null;
+  const returnTo = useMemo(() => {
+    if (stateReturnTo) {
+      return stateReturnTo;
+    }
+    if (projectFilterId && currentSession) {
+      return buildProjectHistoryReturnPath(projectFilterId, sessionHistoryView(currentSession));
+    }
+    if (projectFilterId) {
+      return `/projects/${projectFilterId}?tab=history`;
+    }
+    return '/projects';
+  }, [stateReturnTo, projectFilterId, currentSession]);
+  const returnLabel = returnTo.includes('historyView=multi') ? '返回多场景列表' : '返回历史记录';
 
   const handleExportReport = async (format: ReportFormat) => {
     if (!canExportReport) {
@@ -198,7 +210,7 @@ const Analysis: React.FC = () => {
             icon={<ArrowLeftOutlined />}
             onClick={() => navigate(returnTo)}
           >
-            返回
+            {returnLabel}
           </Button>
           <h2 style={{ margin: 0 }}>性能分析</h2>
           {projectFilterId && <Tag color="blue">项目 {projectFilterId}</Tag>}

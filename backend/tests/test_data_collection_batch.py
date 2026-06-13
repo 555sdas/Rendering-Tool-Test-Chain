@@ -2,7 +2,10 @@ from datetime import datetime, timedelta
 
 from app.models.test_session import TestSession as SessionModel
 from app.models.test_session import TestSessionStatus as SessionStatus
+from app.models.test_task import TestTask as TaskModel
+from app.models.unity_project_lease import UnityProjectLease
 from app.models.performance_sample import PerformanceSample
+from app.services.unity_project_lease_service import UnityProjectLeaseService
 
 
 def test_batch_upload_rejects_invalid_session_time_and_duration(client, db, admin_auth_headers):
@@ -112,3 +115,50 @@ def test_batch_upload_stores_texture_memory_and_manifest(client, db, admin_auth_
     assert sample.render_texture_memory_mb == 48.0
     db.refresh(session)
     assert session.config["quality_metric_manifest"] == manifest
+
+
+def test_single_scene_upload_completes_task_and_releases_lease(client, db, admin_auth_headers, tmp_path):
+    task = TaskModel(
+        name="Single scene",
+        task_type="unity_local_render_test",
+        status="running",
+        started_at=datetime.utcnow(),
+        config={"unity_project_path": str(tmp_path)},
+    )
+    db.add(task)
+    db.flush()
+    session = SessionModel(
+        name="#single",
+        status=SessionStatus.RUNNING.value,
+        started_at=datetime.utcnow(),
+        config={"test_task_id": task.id},
+    )
+    db.add(session)
+    db.flush()
+    task.config = {
+        "unity_project_path": str(tmp_path),
+        "platform_session_id": session.id,
+    }
+    db.add(
+        UnityProjectLease(
+            project_key=UnityProjectLeaseService.project_key(str(tmp_path)),
+            project_path=str(tmp_path),
+            owner_type="single_scene",
+            owner_id=task.id,
+            parent_task_id=task.id,
+            heartbeat_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+    )
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/data-collection/test-sessions/{session.id}/samples/batch",
+        headers=admin_auth_headers,
+        json={"samples": [{"timestamp": datetime.utcnow().isoformat(), "frameRate": 60}]},
+    )
+
+    assert response.status_code == 200
+    db.refresh(task)
+    assert task.status == "completed"
+    assert db.query(UnityProjectLease).count() == 0

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.models.project import Project
 from app.models.test_batch import TestBatch as BatchModel, TestBatchItem as BatchItemModel
+from app.models.test_session import TestSession as SessionModel
 from app.models.test_task import TestTask as TaskModel
 from app.models.unity_project_lease import UnityProjectLease
 from app.services.unity_batch_service import UnityBatchService
@@ -169,7 +170,7 @@ def test_unity_batch_start_requires_at_least_two_scenes(client, auth_headers):
     assert response.status_code == 422
 
 
-def test_stop_running_batch_sends_parent_stop_file_instead_of_immediate_kill(db, monkeypatch, tmp_path):
+def test_stop_running_batch_cancels_uploading_item_and_terminates_cold_start(db, monkeypatch, tmp_path):
     project = Project(name="Stop project")
     db.add(project)
     db.flush()
@@ -204,7 +205,7 @@ def test_stop_running_batch_sends_parent_stop_file_instead_of_immediate_kill(db,
             scene_resource_id="scene-a",
             scene_display_name="Scene A",
             unity_scene_path="Assets/A.unity",
-            status="running",
+            status="uploading",
         )
     )
     db.commit()
@@ -220,7 +221,163 @@ def test_stop_running_batch_sends_parent_stop_file_instead_of_immediate_kill(db,
     command_file = tmp_path / "Library" / "XRDataCollector" / f"orchestration-command-{batch.id}.json"
     assert stop_file.exists()
     assert command_file.exists()
-    assert terminated == []
+    db.refresh(batch.items[0])
+    assert batch.items[0].status == "cancelled"
+    assert terminated == [12345]
+
+
+def test_upload_completion_ignores_stale_session_after_retry(db):
+    project = Project(name="Retry project")
+    db.add(project)
+    db.flush()
+    parent_task = TaskModel(name="Parent", task_type="unity_multi_scene_orchestration", status="running", project_id=project.id)
+    db.add(parent_task)
+    db.flush()
+    batch = BatchModel(
+        project_id=project.id,
+        parent_task_id=parent_task.id,
+        status="running",
+        current_scene_index=0,
+        scene_total=2,
+        unity_project_path="/tmp/retry-project",
+        unity_project_key=UnityProjectLeaseService.project_key("/tmp/retry-project"),
+    )
+    db.add(batch)
+    db.flush()
+    stale_session = SessionModel(name="stale", status="completed", project_id=project.id)
+    current_session = SessionModel(name="current", status="running", project_id=project.id)
+    db.add_all([stale_session, current_session])
+    db.flush()
+    item = BatchItemModel(
+        batch_id=batch.id,
+        scene_index=0,
+        scene_resource_id="scene-a",
+        scene_display_name="Scene A",
+        unity_scene_path="Assets/A.unity",
+        status="running",
+        current_session_id=current_session.id,
+    )
+    next_item = BatchItemModel(
+        batch_id=batch.id,
+        scene_index=1,
+        scene_resource_id="scene-b",
+        scene_display_name="Scene B",
+        unity_scene_path="Assets/B.unity",
+        status="pending",
+    )
+    db.add_all([item, next_item])
+    db.flush()
+    stale_session.config = {"batch_item_id": item.id}
+    db.commit()
+
+    UnityBatchService(db).on_scene_upload_completed(stale_session)
+    db.commit()
+
+    db.refresh(batch)
+    db.refresh(item)
+    db.refresh(next_item)
+    assert batch.current_scene_index == 0
+    assert item.status == "running"
+    assert next_item.status == "pending"
+
+
+def test_upload_completion_advances_current_running_session(db):
+    project = Project(name="Advance project")
+    db.add(project)
+    db.flush()
+    parent_task = TaskModel(name="Parent", task_type="unity_multi_scene_orchestration", status="running", project_id=project.id)
+    db.add(parent_task)
+    db.flush()
+    batch = BatchModel(
+        project_id=project.id,
+        parent_task_id=parent_task.id,
+        status="running",
+        current_scene_index=0,
+        scene_total=2,
+        unity_project_path="/tmp/advance-project",
+        unity_project_key=UnityProjectLeaseService.project_key("/tmp/advance-project"),
+    )
+    db.add(batch)
+    db.flush()
+    session = SessionModel(name="current", status="completed", project_id=project.id)
+    db.add(session)
+    db.flush()
+    item = BatchItemModel(
+        batch_id=batch.id,
+        scene_index=0,
+        scene_resource_id="scene-a",
+        scene_display_name="Scene A",
+        unity_scene_path="Assets/A.unity",
+        status="uploading",
+        current_session_id=session.id,
+    )
+    next_item = BatchItemModel(
+        batch_id=batch.id,
+        scene_index=1,
+        scene_resource_id="scene-b",
+        scene_display_name="Scene B",
+        unity_scene_path="Assets/B.unity",
+        status="pending",
+    )
+    db.add_all([item, next_item])
+    db.flush()
+    session.config = {"batch_item_id": item.id}
+    db.commit()
+
+    UnityBatchService(db).on_scene_upload_completed(session)
+    db.commit()
+
+    db.refresh(batch)
+    db.refresh(item)
+    db.refresh(next_item)
+    assert batch.current_scene_index == 1
+    assert item.status == "completed"
+    assert next_item.status == "running"
+
+
+def test_decision_rejects_item_not_awaiting_user_decision(db):
+    project = Project(name="Decision project")
+    db.add(project)
+    db.flush()
+    parent_task = TaskModel(name="Parent", task_type="unity_multi_scene_orchestration", status="running", project_id=project.id)
+    db.add(parent_task)
+    db.flush()
+    batch = BatchModel(
+        project_id=project.id,
+        parent_task_id=parent_task.id,
+        status="awaiting_user_decision",
+        current_scene_index=0,
+        scene_total=1,
+        decision_version=1,
+        unity_project_path="/tmp/decision-project",
+        unity_project_key=UnityProjectLeaseService.project_key("/tmp/decision-project"),
+    )
+    db.add(batch)
+    db.flush()
+    item = BatchItemModel(
+        batch_id=batch.id,
+        scene_index=0,
+        scene_resource_id="scene-a",
+        scene_display_name="Scene A",
+        unity_scene_path="Assets/A.unity",
+        status="running",
+    )
+    db.add(item)
+    db.commit()
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        UnityBatchService(db).apply_decision(
+            batch_id=batch.id,
+            action="skip",
+            expected_item_id=item.id,
+            expected_scene_index=0,
+            decision_version=1,
+        )
+
+    assert exc.value.status_code == 409
 
 
 def test_reconcile_active_batch_marks_missing_cold_start_process_failed(db, monkeypatch, tmp_path):

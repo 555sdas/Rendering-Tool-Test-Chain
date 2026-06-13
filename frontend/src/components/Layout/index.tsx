@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
+import GlobalUnityProgress from '@/components/GlobalUnityProgress';
 
 const { Header, Sider, Content } = Layout;
 
@@ -146,6 +147,7 @@ const MainLayout: React.FC = () => {
             </Dropdown>
           </div>
         </Header>
+        <GlobalUnityProgress />
         <Content
           style={{
             margin: 24,

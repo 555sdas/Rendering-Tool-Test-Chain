@@ -22,7 +22,7 @@ cd frontend
 npm run dev
 ```
 
-浏览器访问：**http://localhost:5173**
+浏览器访问：**[http://localhost:5173](http://localhost:5173)**
 
 ---
 

@@ -80,7 +80,7 @@ class UnityBatchService:
 
     def reconcile_active_batches(self) -> dict[str, int]:
         """Reconcile persisted batches after a backend restart."""
-        purged_leases = self.lease_service.purge_expired()
+        purged_leases = self.lease_service.purge_expired() + self.lease_service.purge_inactive()
         failed_batches = 0
         active_statuses = [
             TestBatchStatus.PENDING.value,
@@ -342,6 +342,8 @@ class UnityBatchService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="决策版本已过期，请刷新后重试")
 
         item = self._get_item(batch, expected_item_id, expected_scene_index)
+        if item.status != TestBatchItemStatus.AWAITING_USER_DECISION.value:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前场景项不在等待用户决策状态")
         if action == "abort":
             return self.stop_batch(batch_id)
 
@@ -397,25 +399,33 @@ class UnityBatchService:
         parent_task = self.db.query(TestTask).filter(TestTask.id == batch.parent_task_id).first()
         parent_config = dict(parent_task.config or {}) if parent_task else {}
         runner_log_path = self.runner._path_or_none(parent_config.get("runner_log_path"))
+        launch_mode = parent_config.get("launch_mode")
+        pid = self.runner._int_or_none(parent_config.get("process_id"))
 
         batch.status = TestBatchStatus.CANCELLED.value
         batch.completed_at = datetime.utcnow()
         if parent_task:
             parent_task.status = TestTaskStatus.CANCELLED.value
             parent_task.completed_at = datetime.utcnow()
-            # The orchestration runner polls the parent-task stop file in every
-            # state, including active collection. Cold-start processes are
-            # reclaimed by the existing process watchdog if graceful shutdown
-            # does not finish within its grace period.
+            # The orchestration runner polls these files in every state. A
+            # cold-start editor also receives SIGTERM below so stop is prompt.
             self.runner._request_existing_editor_stop(parent_config, parent_task.id, runner_log_path)
             self.runner._request_orchestration_abort(batch.id, parent_config)
 
         for item in batch.items:
-            if item.status in {TestBatchItemStatus.PENDING.value, TestBatchItemStatus.RUNNING.value, TestBatchItemStatus.AWAITING_USER_DECISION.value}:
+            if item.status in {
+                TestBatchItemStatus.PENDING.value,
+                TestBatchItemStatus.RUNNING.value,
+                TestBatchItemStatus.UPLOADING.value,
+                TestBatchItemStatus.AWAITING_USER_DECISION.value,
+            }:
                 item.status = TestBatchItemStatus.CANCELLED.value
                 if item.current_session_id:
                     session = self.db.query(TestSession).filter(TestSession.id == item.current_session_id).first()
-                    if session and session.status == TestSessionStatus.RUNNING.value:
+                    if session and session.status in {
+                        TestSessionStatus.PENDING.value,
+                        TestSessionStatus.RUNNING.value,
+                    }:
                         session.status = TestSessionStatus.CANCELLED.value
                         session.ended_at = datetime.utcnow()
 
@@ -423,6 +433,8 @@ class UnityBatchService:
         self._refresh_batch_summary(batch)
         self.runner._append_runner_log(runner_log_path, "INFO", f"多场景编排已终止：batch={batch.id}")
         self.db.commit()
+        if launch_mode == "new_editor" and pid:
+            self.runner._terminate_process(pid, runner_log_path)
         return self._batch_detail(batch)
 
     def on_scene_upload_completed(self, session: TestSession) -> None:
@@ -435,6 +447,17 @@ class UnityBatchService:
             return
         batch = self.db.query(TestBatch).filter(TestBatch.id == item.batch_id).first()
         if not batch:
+            return
+        if batch.status != TestBatchStatus.RUNNING.value:
+            return
+        if item.scene_index != batch.current_scene_index:
+            return
+        if item.current_session_id != session.id:
+            return
+        if item.status not in {
+            TestBatchItemStatus.RUNNING.value,
+            TestBatchItemStatus.UPLOADING.value,
+        }:
             return
 
         item.status = TestBatchItemStatus.COMPLETED.value
@@ -464,7 +487,8 @@ class UnityBatchService:
                 parent_task.completed_at = datetime.utcnow()
 
         self._refresh_batch_summary(batch)
-        self.lease_service.heartbeat(batch.unity_project_path)
+        if batch.status not in TERMINAL_BATCH_STATUSES:
+            self.lease_service.heartbeat(batch.unity_project_path)
         self.db.flush()
 
     def on_progress_event(self, parent_task: TestTask, payload: dict[str, Any]) -> None:
