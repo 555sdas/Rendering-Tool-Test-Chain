@@ -16,7 +16,7 @@ function Quote-Arg([string]$Value) {
     '"' + $Value.Replace('"', '\"') + '"'
 }
 
-Write-Host "Opening backend and frontend terminals..." -ForegroundColor Cyan
+Write-Host "Opening backend and Electron frontend terminals..." -ForegroundColor Cyan
 
 Start-Process -FilePath $PowerShellExe `
     -WorkingDirectory $Root `
@@ -27,4 +27,4 @@ Start-Process -FilePath $PowerShellExe `
     -ArgumentList "-NoExit -ExecutionPolicy Bypass -File $(Quote-Arg $FrontendScript)"
 
 Write-Host "Backend:  http://localhost:8002/api/v1/docs" -ForegroundColor Green
-Write-Host "Frontend: http://localhost:5173" -ForegroundColor Green
+Write-Host "Frontend: Electron desktop window" -ForegroundColor Green

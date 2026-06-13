@@ -13,11 +13,41 @@
 
 ## 启动
 
-不需要 PyCharm npm 插件，直接使用命令行：
+### Electron 桌面开发模式（推荐）
+
+日常 UI 使用 Electron 应用窗口呈现，不需要打开外部浏览器：
+
+```bash
+cd frontend
+npm run desktop:dev
+```
+
+该命令会同时启动 Vite 和 Electron，并保留 React 热更新。关闭命令所在终端或按 `Ctrl+C` 会同时停止两者。
+
+Electron 当前仅作为前端运行容器，不负责启动或停止 FastAPI、数据库和 Unity。启动桌面界面前，仍需单独启动后端。
+
+首次安装 Electron 依赖：
+
+```bash
+npm install
+```
+
+如果 npm 包已安装，但启动时报错 `Electron failed to install correctly`，说明 Electron 可执行文件下载未完成。
+在中国大陆网络环境下可使用镜像补充下载：
+
+```bash
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electron/install.js
+```
+
+该命令成功后，`node_modules/electron/path.txt` 与 `node_modules/electron/dist` 应当存在。
+
+### 浏览器辅助调试
+
+需要使用浏览器开发工具时，可以继续使用原有方式：
 
 ```powershell
 cd C:\Users\fz121\PycharmProjects\Rendering-Tool-Test-Chain
-powershell -ExecutionPolicy Bypass -File .\scripts\start-frontend.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-frontend.ps1 -Browser
 ```
 
 访问：
